@@ -10,6 +10,7 @@ import { Reports } from './components/pages/Reports';
 import { ProfileModal } from './components/modals/ProfileModal';
 import { SettingsModal } from './components/modals/SettingsModal';
 import { NotificationsModal } from './components/modals/NotificationsModal';
+import { LeadRulesModal } from './components/modals/LeadRulesModal';
 import { ToastContainer } from './components/shared/Toast';
 import { ActivityDrawer } from './components/shared/ActivityDrawer';
 
@@ -51,6 +52,7 @@ function AppContent() {
       <ProfileModal />
       <SettingsModal />
       <NotificationsModal />
+      <LeadRulesModal />
       <ActivityDrawer />
 
       {/* Toast Notifications */}

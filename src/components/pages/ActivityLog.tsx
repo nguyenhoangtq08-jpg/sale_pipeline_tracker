@@ -1,13 +1,18 @@
 import { useState, useMemo } from 'react';
-import { useApp } from '../../context/AppContext';
-import { Modal } from '../shared/Modal';
+import { useApp, useFilteredData } from '../../context/AppContext';
 import { Drawer } from '../shared/Drawer';
 import { Badge } from '../shared/Badge';
 import { MetricCard } from '../shared/MetricCard';
-import { ACTIVITY_TYPES, ACTIVITY_COLORS, STAGE_COLORS, type ActivityType, type Lead, type Activity } from '../../types';
+import { LeadTemperatureMatrix } from '../shared/LeadTemperatureMatrix';
+import { AddActivityModal } from '../modals/AddActivityModal';
+import { ACTIVITY_TYPES, ACTIVITY_COLORS, STAGE_COLORS, type ActivityType, type TimeFilter, type ActivityMode, type Activity, type ScheduledTodo } from '../../types';
 
 function formatDate(date: string): string {
   return new Date(date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+function formatTime(date: string): string {
+  return new Date(date).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 }
 
 function timeAgo(date: string): string {
@@ -18,44 +23,96 @@ function timeAgo(date: string): string {
   return `${Math.floor(seconds / 86400)}d ago`;
 }
 
-function groupByDate(activities: Activity[]): Record<string, Activity[]> {
+function groupByDate(items: Activity[]): Record<string, Activity[]> {
   const grouped: Record<string, Activity[]> = {};
-  activities.forEach(a => {
-    const dateKey = new Date(a.created_at).toDateString();
+  items.forEach(item => {
+    const dateKey = new Date(item.created_at).toDateString();
     if (!grouped[dateKey]) grouped[dateKey] = [];
-    grouped[dateKey].push(a);
+    grouped[dateKey].push(item);
   });
   return grouped;
 }
 
+function isWithinTimeFilter(date: string, filter: TimeFilter): boolean {
+  if (filter === 'all') return true;
+
+  const now = new Date();
+  const itemDate = new Date(date);
+
+  if (filter === 'today') {
+    return itemDate.toDateString() === now.toDateString();
+  }
+
+  if (filter === 'week') {
+    const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    return itemDate >= weekAgo;
+  }
+
+  if (filter === 'month') {
+    const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    return itemDate >= monthAgo;
+  }
+
+  return true;
+}
+
+const ACTIVITY_ICONS: Record<ActivityType, string> = {
+  'Call': 'fa-phone',
+  'Email': 'fa-envelope',
+  'Meeting': 'fa-users',
+  'Note': 'fa-note-sticky',
+};
+
+const ACTIVITY_EMOJIS: Record<ActivityType, string> = {
+  'Call': '📞',
+  'Email': '📧',
+  'Meeting': '🤝',
+  'Note': '📝',
+};
+
 export function ActivityLog() {
-  const { activities, leads, addActivity, deleteActivity, currentUser } = useApp();
+  const { currentUser, deleteActivity, toggleTodoDone, deleteScheduledTodo } = useApp();
+  const { getFilteredActivities, getFilteredScheduledTodos } = useFilteredData();
+
   const [showLogModal, setShowLogModal] = useState(false);
+  const [modalMode, setModalMode] = useState<ActivityMode>('log');
   const [showDrawer, setShowDrawer] = useState(false);
   const [selectedActivity, setSelectedActivity] = useState<Activity | null>(null);
+  const [selectedTodo, setSelectedTodo] = useState<ScheduledTodo | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('all');
-  const [sortOrder, setSortOrder] = useState<string>('desc');
-  const [formData, setFormData] = useState({
-    type: 'Call' as ActivityType,
-    lead_id: '',
-    lead_name: '',
-    company: '',
-    stage: '',
-    date: new Date().toISOString().split('T')[0],
-    duration: '30',
-    notes: '',
-    next_action: '',
-  });
+  const [timeFilter, setTimeFilter] = useState<TimeFilter>('all');
+  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
 
-  const totalCalls = activities.filter(a => a.type === 'Call').length;
-  const totalEmails = activities.filter(a => a.type === 'Email').length;
-  const totalMeetings = activities.filter(a => a.type === 'Meeting').length;
-  const totalHours = Math.round(activities.reduce((sum, a) => sum + a.duration, 0) / 60);
+  const filteredActivities = getFilteredActivities();
+  const filteredScheduledTodos = getFilteredScheduledTodos();
 
-  const filteredActivities = useMemo(() => {
-    let result = [...activities];
+  // Active todos (not done)
+  const activeTodos = filteredScheduledTodos.filter(t => !t.done);
 
+  // Calculate counts per type
+  const typeCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: filteredActivities.length };
+    ACTIVITY_TYPES.forEach(type => {
+      counts[type] = filteredActivities.filter(a => a.type === type).length;
+    });
+    return counts;
+  }, [filteredActivities]);
+
+  // Total KPIs - based on filtered data for managers
+  const totalCalls = filteredActivities.filter(a => a.type === 'Call').length;
+  const totalEmails = filteredActivities.filter(a => a.type === 'Email').length;
+  const totalMeetings = filteredActivities.filter(a => a.type === 'Meeting').length;
+  const totalHours = Math.round(filteredActivities.reduce((sum, a) => sum + a.duration, 0) / 60);
+
+  // Filter activities
+  const displayActivities = useMemo(() => {
+    let result = [...filteredActivities];
+
+    // Time filter
+    result = result.filter(a => isWithinTimeFilter(a.created_at, timeFilter));
+
+    // Search filter
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       result = result.filter(a =>
@@ -65,10 +122,12 @@ export function ActivityLog() {
       );
     }
 
+    // Type filter
     if (typeFilter !== 'all') {
       result = result.filter(a => a.type === typeFilter);
     }
 
+    // Sort
     result.sort((a, b) => {
       const dateA = new Date(a.created_at).getTime();
       const dateB = new Date(b.created_at).getTime();
@@ -76,53 +135,17 @@ export function ActivityLog() {
     });
 
     return result;
-  }, [activities, searchQuery, typeFilter, sortOrder]);
+  }, [filteredActivities, timeFilter, searchQuery, typeFilter, sortOrder]);
 
-  const groupedActivities = groupByDate(filteredActivities);
-
-  const handleLogActivity = async () => {
-    if (!formData.lead_name.trim()) return;
-
-    await addActivity({
-      type: formData.type,
-      lead_id: formData.lead_id || null,
-      lead_name: formData.lead_name,
-      company: formData.company || null,
-      stage: formData.stage || null,
-      date: formData.date,
-      duration: parseInt(formData.duration) || 0,
-      notes: formData.notes || null,
-      next_action: formData.next_action || null,
-      user_id: currentUser?.id || '0',
-    });
-
-    setFormData({
-      type: 'Call',
-      lead_id: '',
-      lead_name: '',
-      company: '',
-      stage: '',
-      date: new Date().toISOString().split('T')[0],
-      duration: '30',
-      notes: '',
-      next_action: '',
-    });
-    setShowLogModal(false);
-  };
-
-  const handleSelectLead = (lead: Lead) => {
-    setFormData({
-      ...formData,
-      lead_id: lead.id,
-      lead_name: lead.name,
-      company: lead.company || '',
-      stage: lead.stage,
-    });
-  };
+  const groupedActivities = groupByDate(displayActivities);
 
   const openDrawer = (activity: Activity) => {
     setSelectedActivity(activity);
     setShowDrawer(true);
+  };
+
+  const handleToggleTodo = async (todo: ScheduledTodo) => {
+    await toggleTodoDone(todo.id);
   };
 
   const handleDeleteActivity = async () => {
@@ -132,13 +155,24 @@ export function ActivityLog() {
     setSelectedActivity(null);
   };
 
+  const handleDeleteTodo = async (id: string) => {
+    await deleteScheduledTodo(id);
+    if (selectedTodo?.id === id) {
+      setSelectedTodo(null);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-text-primary dark:text-white">Activity Log</h1>
-          <p className="text-text-secondary dark:text-text-muted">Track your sales activities and interactions</p>
+          <p className="text-text-secondary dark:text-text-muted">
+            {currentUser?.role === 'manager'
+              ? 'Track team activities and lead engagement'
+              : 'Track your sales activities and interactions'}
+          </p>
         </div>
         <button
           onClick={() => setShowLogModal(true)}
@@ -157,8 +191,127 @@ export function ActivityLog() {
         <MetricCard label="Hours Logged" value={totalHours} icon="fa-clock" color="#f59e0b" />
       </div>
 
+      {/* Scheduled To-Dos Section */}
+      {activeTodos.length > 0 && (
+        <div className="bg-bg-card dark:bg-bg-card rounded-xl shadow-sm border border-border dark:border-border overflow-hidden">
+          <div className="px-6 py-4 border-b border-border dark:border-border bg-gradient-to-r from-green-50 to-blue-50 dark:from-green-900/10 dark:to-blue-900/10">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-text-primary dark:text-white flex items-center gap-2">
+                <i className="fa-solid fa-calendar-check text-green-500"></i>
+                Scheduled To-Dos
+                <span className="px-2 py-0.5 rounded-full bg-green-500 text-white text-xs font-medium">{activeTodos.length}</span>
+              </h3>
+            </div>
+          </div>
+          <div className="divide-y divide-border dark:divide-border max-h-[300px] overflow-y-auto">
+            {activeTodos.map((todo) => (
+              <div key={todo.id} className="px-6 py-3 flex items-center gap-4 hover:bg-gray-50 dark:hover:bg-gray-900/30 transition-colors">
+                {/* Checkbox */}
+                <button
+                  onClick={() => handleToggleTodo(todo)}
+                  className="w-5 h-5 rounded border-2 border-gray-300 dark:border-gray-600 hover:border-green-500 flex items-center justify-center transition-colors flex-shrink-0"
+                >
+                  <i className="fa-solid fa-check text-green-500 opacity-0 hover:opacity-50"></i>
+                </button>
+
+                {/* Content */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
+                    <span className="font-medium text-text-primary dark:text-white">{todo.lead_name}</span>
+                    {todo.company && (
+                      <span className="text-text-secondary dark:text-text-muted text-sm">{todo.company}</span>
+                    )}
+                    {todo.stage && (
+                      <Badge variant="stage" color={STAGE_COLORS[todo.stage as keyof typeof STAGE_COLORS]} size="sm">
+                        {todo.stage}
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-sm text-text-secondary dark:text-text-muted truncate">{todo.agenda}</p>
+                </div>
+
+                {/* Scheduled Time */}
+                <div className="text-right flex-shrink-0">
+                  <p className="text-sm font-medium text-text-primary dark:text-white">{formatDate(todo.scheduled_date)}</p>
+                  {todo.scheduled_time && (
+                    <p className="text-xs text-text-muted">{todo.scheduled_time}</p>
+                  )}
+                </div>
+
+                {/* Actions */}
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <button
+                    onClick={() => handleToggleTodo(todo)}
+                    className="p-1.5 rounded hover:bg-green-100 dark:hover:bg-green-900/30 text-green-500 transition-colors"
+                    title="Mark as done"
+                  >
+                    <i className="fa-solid fa-check text-sm"></i>
+                  </button>
+                  <button
+                    onClick={() => handleDeleteTodo(todo.id)}
+                    className="p-1.5 rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500 transition-colors"
+                    title="Delete"
+                  >
+                    <i className="fa-solid fa-trash text-sm"></i>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Lead Temperature Matrix */}
+      <LeadTemperatureMatrix />
+
       {/* Filters */}
       <div className="bg-bg-card dark:bg-bg-card rounded-xl p-4 shadow-sm border border-border dark:border-border">
+        {/* Time Horizon Pills */}
+        <div className="flex flex-wrap gap-2 mb-4">
+          {[
+            { id: 'all', label: 'All Time' },
+            { id: 'today', label: 'Today' },
+            { id: 'week', label: 'This Week' },
+            { id: 'month', label: 'This Month' },
+          ].map((item) => (
+            <button
+              key={item.id}
+              onClick={() => setTimeFilter(item.id as TimeFilter)}
+              className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                timeFilter === item.id
+                  ? 'bg-accent text-white'
+                  : 'bg-gray-100 dark:bg-gray-800 text-text-secondary dark:text-text-muted hover:bg-gray-200 dark:hover:bg-gray-700'
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Type Tabs */}
+        <div className="flex flex-wrap gap-2 mb-4">
+          {['all', ...ACTIVITY_TYPES].map((type) => (
+            <button
+              key={type}
+              onClick={() => setTypeFilter(type)}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
+                typeFilter === type
+                  ? 'bg-accent text-white'
+                  : 'bg-gray-100 dark:bg-gray-800 text-text-secondary dark:text-text-muted hover:bg-gray-200 dark:hover:bg-gray-700'
+              }`}
+            >
+              {type === 'all' ? 'All' : (
+                <>
+                  <span>{ACTIVITY_EMOJIS[type as ActivityType]}</span>
+                  <span>{type}</span>
+                  <span className="px-2 py-0.5 rounded-full bg-gray-200 dark:bg-gray-700 text-xs">{typeCounts[type] || 0}</span>
+                </>
+              )}
+            </button>
+          ))}
+        </div>
+
+        {/* Search and Sort */}
         <div className="flex flex-wrap gap-3">
           <div className="flex-1 min-w-[200px]">
             <div className="relative">
@@ -172,24 +325,9 @@ export function ActivityLog() {
               />
             </div>
           </div>
-          <div className="flex gap-2">
-            {['all', ...ACTIVITY_TYPES].map((type) => (
-              <button
-                key={type}
-                onClick={() => setTypeFilter(type)}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  typeFilter === type
-                    ? 'bg-accent text-white'
-                    : 'bg-gray-100 dark:bg-gray-800 text-text-secondary dark:text-text-muted hover:bg-gray-200 dark:hover:bg-gray-700'
-                }`}
-              >
-                {type === 'all' ? 'All' : type}
-              </button>
-            ))}
-          </div>
           <select
             value={sortOrder}
-            onChange={(e) => setSortOrder(e.target.value)}
+            onChange={(e) => setSortOrder(e.target.value as 'desc' | 'asc')}
             className="px-4 py-2 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white"
           >
             <option value="desc">Newest First</option>
@@ -203,7 +341,7 @@ export function ActivityLog() {
         {Object.keys(groupedActivities).length === 0 ? (
           <div className="bg-bg-card dark:bg-bg-card rounded-xl p-12 text-center shadow-sm border border-border dark:border-border">
             <i className="fa-solid fa-clock-rotate-left text-4xl text-text-muted mb-3 block"></i>
-            <p className="text-text-secondary dark:text-text-muted">No activities yet</p>
+            <p className="text-text-secondary dark:text-text-muted">No activities found</p>
           </div>
         ) : (
           Object.entries(groupedActivities).map(([dateKey, dateActivities]) => (
@@ -211,7 +349,9 @@ export function ActivityLog() {
               {/* Date Separator */}
               <div className="flex items-center gap-3 mb-3">
                 <div className="h-px flex-1 bg-border dark:bg-border"></div>
-                <span className="text-sm font-medium text-text-muted">{formatDate(dateKey)}</span>
+                <span className="text-sm font-medium text-text-muted px-3 py-1 rounded-full bg-gray-100 dark:bg-gray-800">
+                  {formatDate(dateActivities[0].created_at)}
+                </span>
                 <div className="h-px flex-1 bg-border dark:bg-border"></div>
               </div>
 
@@ -229,12 +369,7 @@ export function ActivityLog() {
                       style={{ backgroundColor: `${ACTIVITY_COLORS[activity.type as ActivityType]}20` }}
                     >
                       <i
-                        className={`fa-solid ${
-                          activity.type === 'Call' ? 'fa-phone' :
-                          activity.type === 'Email' ? 'fa-envelope' :
-                          activity.type === 'Meeting' ? 'fa-users' :
-                          'fa-note-sticky'
-                        }`}
+                        className={`fa-solid ${ACTIVITY_ICONS[activity.type as ActivityType]}`}
                         style={{ color: ACTIVITY_COLORS[activity.type as ActivityType] }}
                       ></i>
                     </div>
@@ -242,10 +377,7 @@ export function ActivityLog() {
                     {/* Content */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <Badge
-                          variant="stage"
-                          color={ACTIVITY_COLORS[activity.type as ActivityType]}
-                        >
+                        <Badge variant="stage" color={ACTIVITY_COLORS[activity.type as ActivityType]}>
                           {activity.type}
                         </Badge>
                         <span className="font-medium text-text-primary dark:text-white">{activity.lead_name}</span>
@@ -274,7 +406,10 @@ export function ActivityLog() {
                     </div>
 
                     {/* Time */}
-                    <span className="text-xs text-text-muted flex-shrink-0">{timeAgo(activity.created_at)}</span>
+                    <div className="text-right flex-shrink-0">
+                      <span className="text-xs text-text-muted block">{timeAgo(activity.created_at)}</span>
+                      <span className="text-xs text-text-muted block">{formatTime(activity.created_at)}</span>
+                    </div>
                   </button>
                 ))}
               </div>
@@ -283,88 +418,17 @@ export function ActivityLog() {
         )}
       </div>
 
-      {/* Log Activity Modal */}
-      <Modal isOpen={showLogModal} onClose={() => setShowLogModal(false)} title="Log Activity" size="lg">
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-text-primary dark:text-white mb-1">Type</label>
-              <select
-                value={formData.type}
-                onChange={(e) => setFormData({ ...formData, type: e.target.value as ActivityType })}
-                className="w-full px-4 py-2 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white"
-              >
-                {ACTIVITY_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-text-primary dark:text-white mb-1">Lead *</label>
-              <select
-                value={formData.lead_id}
-                onChange={(e) => {
-                  const lead = leads.find(l => l.id === e.target.value);
-                  if (lead) handleSelectLead(lead);
-                  else setFormData({ ...formData, lead_id: '', lead_name: '' });
-                }}
-                className="w-full px-4 py-2 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white"
-              >
-                <option value="">Select Lead</option>
-                {leads.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-text-primary dark:text-white mb-1">Date</label>
-              <input
-                type="date"
-                value={formData.date}
-                onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                className="w-full px-4 py-2 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-text-primary dark:text-white mb-1">Duration (min)</label>
-              <input
-                type="number"
-                value={formData.duration}
-                onChange={(e) => setFormData({ ...formData, duration: e.target.value })}
-                className="w-full px-4 py-2 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white"
-              />
-            </div>
-            <div className="col-span-2">
-              <label className="block text-sm font-medium text-text-primary dark:text-white mb-1">Notes</label>
-              <textarea
-                value={formData.notes}
-                onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                rows={3}
-                className="w-full px-4 py-2 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white resize-none"
-                placeholder="Activity details..."
-              />
-            </div>
-            <div className="col-span-2">
-              <label className="block text-sm font-medium text-text-primary dark:text-white mb-1">Next Action</label>
-              <input
-                type="text"
-                value={formData.next_action}
-                onChange={(e) => setFormData({ ...formData, next_action: e.target.value })}
-                className="w-full px-4 py-2 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white"
-                placeholder="Follow-up call, Send proposal..."
-              />
-            </div>
-          </div>
-
-          <button
-            onClick={handleLogActivity}
-            disabled={!formData.lead_name.trim()}
-            className="w-full px-4 py-2 bg-accent text-white rounded-lg hover:bg-indigo-600 transition-colors disabled:opacity-50"
-          >
-            Log Activity
-          </button>
-        </div>
-      </Modal>
+      {/* Add Activity Modal */}
+      <AddActivityModal
+        isOpen={showLogModal}
+        onClose={() => setShowLogModal(false)}
+        mode={modalMode}
+        onModeChange={setModalMode}
+      />
 
       {/* Activity Detail Drawer */}
       <Drawer
-        isOpen={showDrawer}
+        isOpen={showDrawer && !!selectedActivity}
         onClose={() => { setShowDrawer(false); setSelectedActivity(null); }}
         title="Activity Details"
         footer={
@@ -385,12 +449,7 @@ export function ActivityLog() {
                 style={{ backgroundColor: `${ACTIVITY_COLORS[selectedActivity.type as ActivityType]}20` }}
               >
                 <i
-                  className={`fa-solid text-2xl ${
-                    selectedActivity.type === 'Call' ? 'fa-phone' :
-                    selectedActivity.type === 'Email' ? 'fa-envelope' :
-                    selectedActivity.type === 'Meeting' ? 'fa-users' :
-                    'fa-note-sticky'
-                  }`}
+                  className={`fa-solid text-2xl ${ACTIVITY_ICONS[selectedActivity.type as ActivityType]}`}
                   style={{ color: ACTIVITY_COLORS[selectedActivity.type as ActivityType] }}
                 ></i>
               </div>
@@ -421,6 +480,10 @@ export function ActivityLog() {
                   </Badge>
                 </div>
               )}
+              <div>
+                <p className="text-xs text-text-muted uppercase font-semibold mb-1">Logged</p>
+                <p className="text-text-primary dark:text-white">{timeAgo(selectedActivity.created_at)}</p>
+              </div>
             </div>
 
             {/* Notes */}
