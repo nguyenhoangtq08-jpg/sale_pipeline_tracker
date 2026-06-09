@@ -12,6 +12,16 @@ export interface Lead {
   owner_id: string;
   created_at: string;
   updated_at: string;
+  // Deal-specific fields
+  close_date?: string | null;
+  last_activity?: string;
+  activities?: DealActivity[];
+}
+
+export interface DealActivity {
+  type: string;
+  note: string;
+  date: string;
 }
 
 export interface Activity {
