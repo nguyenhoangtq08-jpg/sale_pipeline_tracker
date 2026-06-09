@@ -113,7 +113,7 @@ Write a personalized, professional sales email.`;
       duration: 0,
       notes: `Subject: ${generatedEmail.subject}\n\n${generatedEmail.body}`,
       next_action: 'Follow up on email',
-      user_id: currentUser?.id || '0',
+      owner_id: currentUser?.id || '0',
     });
   };
 

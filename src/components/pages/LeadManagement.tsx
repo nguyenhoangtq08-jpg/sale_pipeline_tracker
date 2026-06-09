@@ -112,7 +112,7 @@ export function LeadManagement() {
       stage: formData.stage,
       probability: parseInt(formData.probability) || 0,
       notes: formData.notes.trim() || null,
-      user_id: currentUser?.id || '0',
+      owner_id: currentUser?.id || '0',
     });
 
     setFormData(initialFormData);

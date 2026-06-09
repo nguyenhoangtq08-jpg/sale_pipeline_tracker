@@ -9,7 +9,7 @@ export interface Lead {
   stage: string;
   probability: number;
   notes: string | null;
-  user_id: string;
+  owner_id: string;
   created_at: string;
   updated_at: string;
 }
@@ -25,8 +25,30 @@ export interface Activity {
   duration: number;
   notes: string | null;
   next_action: string | null;
-  user_id: string;
+  owner_id: string;
   created_at: string;
+}
+
+export interface ScheduledTodo {
+  id: string;
+  lead_id: string | null;
+  lead_name: string;
+  company: string | null;
+  stage: string | null;
+  scheduled_date: string;
+  scheduled_time: string | null;
+  agenda: string;
+  done: boolean;
+  owner_id: string;
+  created_at: string;
+}
+
+export interface LeadRules {
+  id: string;
+  warm_days: number;
+  cold_days: number;
+  updated_at: string;
+  updated_by: string | null;
 }
 
 export interface Account {
@@ -42,6 +64,8 @@ export interface Account {
 export type Stage = 'Prospecting' | 'Qualification' | 'Proposal' | 'Negotiation' | 'Closed Won' | 'Closed Lost';
 export type Source = 'Website' | 'Referral' | 'Event' | 'Cold Call' | 'Other';
 export type ActivityType = 'Call' | 'Email' | 'Meeting' | 'Note';
+export type ActivityMode = 'log' | 'schedule';
+export type TimeFilter = 'all' | 'today' | 'week' | 'month';
 
 export interface Toast {
   id: string;
@@ -78,6 +102,12 @@ export const ACTIVITY_COLORS: Record<ActivityType, string> = {
   'Email': '#3b82f6',
   'Meeting': '#8b5cf6',
   'Note': '#64748b',
+};
+
+export const TEMPERATURE_COLORS = {
+  warm: { bg: '#dcfce7', text: '#166534', border: '#22c55e' },
+  cooling: { bg: '#fffbeb', text: '#92400e', border: '#f59e0b' },
+  cold: { bg: '#eff6ff', text: '#1e40af', border: '#3b82f6' },
 };
 
 export const ACCOUNTS: Account[] = [

@@ -190,7 +190,7 @@ export function Sidebar() {
 }
 
 export function Topbar() {
-  const { currentUser, darkMode, toggleDarkMode, notifications, setShowNotificationsModal, setShowProfileModal, setShowSettingsModal, signOut, currentPage, sidebarCollapsed, setSidebarCollapsed } = useApp();
+  const { currentUser, darkMode, toggleDarkMode, notifications, setShowNotificationsModal, setShowProfileModal, setShowSettingsModal, signOut, currentPage, sidebarCollapsed, setSidebarCollapsed, selectedMemberId, setSelectedMemberId, teamMembers } = useApp();
   const [showDropdown, setShowDropdown] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const unreadCount = notifications.filter(n => !n.read).length;
@@ -232,6 +232,24 @@ export function Topbar() {
             <h1 className="text-lg font-bold text-text-primary dark:text-white">{pageLabels[currentPage]}</h1>
             <p className="text-xs text-text-muted">SalesTrack &gt; {pageLabels[currentPage]}</p>
           </div>
+
+          {/* Member Filter - Manager Only */}
+          {currentUser?.role === 'manager' && (
+            <div className="hidden lg:flex items-center gap-2 ml-4">
+              <i className="fa-solid fa-users text-text-muted text-sm"></i>
+              <select
+                id="act-member-filter"
+                value={selectedMemberId || 'all'}
+                onChange={(e) => setSelectedMemberId(e.target.value === 'all' ? null : e.target.value)}
+                className="px-3 py-1.5 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-accent"
+              >
+                <option value="all">All Members</option>
+                {teamMembers.filter(m => m.role === 'member').map(member => (
+                  <option key={member.id} value={member.id}>{member.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-2 md:gap-4">
