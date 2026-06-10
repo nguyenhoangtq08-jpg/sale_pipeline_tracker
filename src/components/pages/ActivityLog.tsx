@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { useApp, useFilteredData } from '../../context/AppContext';
 import { Drawer } from '../shared/Drawer';
 import { AddActivityModal } from '../modals/AddActivityModal';
-import { ACTIVITY_TYPES, ACTIVITY_COLORS, STAGE_COLORS, type ActivityType, type TimeFilter, type ActivityMode, type Activity, type ScheduledTodo, type Lead } from '../../types';
+import { ACTIVITY_TYPES, ACTIVITY_COLORS, STAGE_COLORS, ACCOUNTS, type ActivityType, type TimeFilter, type ActivityMode, type Activity, type ScheduledTodo, type Lead } from '../../types';
 
 interface LeadWithStatus extends Lead {
   temp: 'warm' | 'cooling' | 'cold';
@@ -63,7 +63,7 @@ const TEMP_CONFIG = {
 };
 
 export function ActivityLog() {
-  const { currentUser, deleteActivity, toggleTodoDone, deleteScheduledTodo, leadRules, setShowLeadRulesModal } = useApp();
+  const { currentUser, deleteActivity, toggleTodoDone, deleteScheduledTodo, leadRules, setShowLeadRulesModal, showToast } = useApp();
   const { getFilteredActivities, getFilteredScheduledTodos, getFilteredLeads } = useFilteredData();
 
   const [showLogModal, setShowLogModal] = useState(false);
@@ -76,30 +76,45 @@ export function ActivityLog() {
   const [leadStatusFilter, setLeadStatusFilter] = useState<string>('all');
   const [memberFilter, setMemberFilter] = useState<string>('');
   const [sortOrder, setSortOrder] = useState<string>('newest');
+  const [todoMemberFilter, setTodoMemberFilter] = useState<string | null>(null);
 
   const filteredActivities = getFilteredActivities();
   const filteredScheduledTodos = getFilteredScheduledTodos();
   const filteredLeads = getFilteredLeads();
   const isManager = currentUser?.role === 'manager';
-  const teamMembers = isManager ? [
-    { id: '1', name: 'Duy Tran', initials: 'DT', color: '#6366f1' },
-    { id: '2', name: 'Mai Le', initials: 'ML', color: '#10b981' },
-    { id: '3', name: 'Hung Vo', initials: 'HV', color: '#8b5cf6' },
-  ] : [];
 
-  // Active todos for today
+  // Active todos for today - with member filtering
   const today = new Date().toDateString();
-  const todayTodos = filteredScheduledTodos.filter(s => new Date(s.scheduled_date).toDateString() === today);
-  const upcomingTodos = filteredScheduledTodos
+  const todosForDisplay = useMemo(() => {
+    if (isManager) {
+      if (todoMemberFilter !== null) {
+        return filteredScheduledTodos.filter(s =>
+          s.assigned_to === todoMemberFilter || (!s.assigned_to && s.owner_id === todoMemberFilter)
+        );
+      }
+      return filteredScheduledTodos;
+    } else {
+      // Member sees only their own tasks + tasks assigned to them
+      return filteredScheduledTodos.filter(s =>
+        s.owner_id === currentUser?.id || s.assigned_to === currentUser?.id
+      );
+    }
+  }, [filteredScheduledTodos, isManager, todoMemberFilter, currentUser?.id]);
+
+  const todayTodos = todosForDisplay.filter(s => new Date(s.scheduled_date).toDateString() === today);
+  const upcomingTodos = todosForDisplay
     .filter(s => new Date(s.scheduled_date) > new Date() && new Date(s.scheduled_date).toDateString() !== today)
     .sort((a, b) => new Date(a.scheduled_date).getTime() - new Date(b.scheduled_date).getTime())
-    .slice(0, 3);
+    .slice(0, 4);
 
-  // KPIs
+  // KPIs - count based on filtered scope
   const kpiCalls = filteredActivities.filter(a => a.type === 'Call').length;
   const kpiEmails = filteredActivities.filter(a => a.type === 'Email').length;
   const kpiMeetings = filteredActivities.filter(a => a.type === 'Meeting').length;
-  const kpiTodayTasks = todayTodos.filter(s => !s.done).length;
+  const kpiTodayTasks = useMemo(() => {
+    const allToday = filteredScheduledTodos.filter(s => new Date(s.scheduled_date).toDateString() === today && !s.done);
+    return allToday.length;
+  }, [filteredScheduledTodos, today]);
   const coldLeads = filteredLeads.filter(l =>
     !['Closed Won', 'Closed Lost'].includes(l.stage) &&
     getLeadTemp(l.id, filteredActivities, leadRules.warm_days, leadRules.cold_days) === 'cold'
@@ -216,10 +231,49 @@ export function ActivityLog() {
 
   const handleToggleTodo = async (todo: ScheduledTodo) => {
     await toggleTodoDone(todo.id);
+    showToast('success', todo.done ? 'Task re-opened' : 'Task done ✓');
   };
 
   const handleDeleteTodo = async (id: string) => {
     await deleteScheduledTodo(id);
+    showToast('info', 'Task removed');
+  };
+
+  const handleExportCSV = () => {
+    const acts = filteredActivities;
+    if (!acts.length) {
+      showToast('warning', 'No activities to export');
+      return;
+    }
+    const headers = ['ID', 'Type', 'Lead', 'Company', 'Stage', 'Date', 'Duration(min)', 'Notes', 'Next Action', 'Owner', 'Created At'];
+    const rows = acts.map(a => {
+      const ownerAcc = ACCOUNTS.find(x => x.id === a.owner_id);
+      return [
+        a.id, a.type, a.lead_name, a.company || '', a.stage || '',
+        a.date ? new Date(a.date).toLocaleDateString() : '',
+        a.duration || 0,
+        `"${(a.notes || '').replace(/"/g, '""')}"`,
+        `"${(a.next_action || '').replace(/"/g, '""')}"`,
+        ownerAcc?.name || '',
+        a.created_at ? new Date(a.created_at).toLocaleDateString() : ''
+      ];
+    });
+    const csv = [headers, ...rows].map(r => r.join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'activities_export.csv';
+    link.click();
+    showToast('success', 'Activities exported as CSV');
+  };
+
+  // Helper to get assigned/creator account
+  const getTodoAccounts = (todo: ScheduledTodo) => {
+    const assignedAcc = ACCOUNTS.find(a => a.id === (todo.assigned_to ?? todo.owner_id));
+    const creatorAcc = ACCOUNTS.find(a => a.id === todo.owner_id);
+    const isAssigned = todo.assigned_to !== undefined && todo.assigned_to !== todo.owner_id;
+    return { assignedAcc, creatorAcc, isAssigned };
   };
 
   return (
@@ -232,7 +286,7 @@ export function ActivityLog() {
             {isManager ? 'Full team view — all members, all leads' : 'Your personal activity log & schedule'}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           {isManager && (
             <button
               onClick={() => setShowLeadRulesModal(true)}
@@ -242,7 +296,13 @@ export function ActivityLog() {
             </button>
           )}
           <button
-            onClick={() => setShowLogModal(true)}
+            onClick={handleExportCSV}
+            className="px-3 py-2 text-sm font-semibold rounded-lg border border-border dark:border-border bg-bg-card dark:bg-bg-card text-text-secondary dark:text-text-muted hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors flex items-center gap-2"
+          >
+            <i className="fa-solid fa-download"></i> Export
+          </button>
+          <button
+            onClick={() => { setModalMode('log'); setShowLogModal(true); }}
             className="px-4 py-2 text-sm font-semibold rounded-lg bg-accent text-white hover:bg-indigo-600 transition-colors flex items-center gap-2"
           >
             <i className="fa-solid fa-plus"></i> Log / Schedule
@@ -262,7 +322,7 @@ export function ActivityLog() {
         <i className={`fa-solid ${isManager ? 'fa-crown' : 'fa-user'}`}></i>
         <span className="text-sm font-semibold">
           {isManager
-            ? 'Manager view — you can see all team activities, configure lead rules, and monitor the full pipeline.'
+            ? 'Manager view — you can see all team activities and assign tasks to team members.'
             : 'Your view — showing only your activities and leads.'}
         </span>
       </div>
@@ -310,75 +370,200 @@ export function ActivityLog() {
                 )}
               </h3>
               <p className="text-xs text-text-muted mt-0.5">{formatDateFull(new Date().toISOString())}</p>
+              {isManager && (
+                <p className="text-[10px] text-text-muted mt-0.5">
+                  <i className="fa-solid fa-user-plus text-accent mr-1"></i>
+                  You can assign tasks to team members
+                </p>
+              )}
             </div>
+            <button
+              onClick={() => { setModalMode('schedule'); setShowLogModal(true); }}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-border dark:border-border hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+            >
+              <i className="fa-solid fa-plus mr-1"></i>
+              {isManager ? 'Add / Assign' : 'Add'}
+            </button>
           </div>
-          <div className="px-4 pb-4 max-h-[280px] overflow-y-auto">
+
+          {/* Member filter tabs for manager */}
+          {isManager && (
+            <div className="flex gap-1 flex-wrap px-4 pb-2 border-b border-border dark:border-border">
+              <div
+                onClick={() => setTodoMemberFilter(null)}
+                className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full text-[11px] font-semibold cursor-pointer transition-all ${
+                  todoMemberFilter === null
+                    ? 'bg-accent text-white'
+                    : 'bg-gray-100 dark:bg-gray-800 text-text-secondary hover:bg-gray-200 dark:hover:bg-gray-700'
+                }`}
+              >
+                All
+                <span className={`px-1.5 py-0.5 rounded text-[9px] ${todoMemberFilter === null ? 'bg-white/25' : 'bg-gray-200 dark:bg-gray-700'}`}>
+                  {filteredScheduledTodos.filter(s => new Date(s.scheduled_date).toDateString() === today && !s.done).length}
+                </span>
+              </div>
+              {ACCOUNTS.map(a => {
+                const aCount = filteredScheduledTodos.filter(s =>
+                  (s.assigned_to === a.id || (!s.assigned_to && s.owner_id === a.id)) &&
+                  new Date(s.scheduled_date).toDateString() === today &&
+                  !s.done
+                ).length;
+                const isActive = todoMemberFilter === a.id;
+                return (
+                  <div
+                    key={a.id}
+                    onClick={() => setTodoMemberFilter(a.id)}
+                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-[11px] font-semibold cursor-pointer transition-all border ${
+                      isActive
+                        ? `text-white`
+                        : 'border-border text-text-secondary hover:border-accent/50 bg-gray-50 dark:bg-gray-900/50'
+                    }`}
+                    style={isActive ? { background: a.color, borderColor: a.color } : {}}
+                  >
+                    <div
+                      className="w-4 h-4 rounded-full flex items-center justify-center text-[7px] font-bold text-white"
+                      style={{ background: isActive ? 'rgba(255,255,255,0.3)' : a.color }}
+                    >
+                      {a.initials}
+                    </div>
+                    {a.name.split(' ').slice(-1)[0]}
+                    {aCount > 0 && (
+                      <span
+                        className="px-1.5 py-0.5 rounded text-[9px]"
+                        style={{
+                          background: isActive ? 'rgba(255,255,255,0.25)' : a.color + '22',
+                          color: isActive ? '#fff' : a.color,
+                        }}
+                      >
+                        {aCount}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          <div className="px-4 pb-4 max-h-[260px] overflow-y-auto">
             {todayTodos.length === 0 && upcomingTodos.length === 0 ? (
               <div className="text-center py-6 text-text-muted">
                 <i className="fa-solid fa-circle-check text-xl text-green-500 mb-2 block"></i>
-                <p className="text-xs">Nothing scheduled today!</p>
+                <p className="text-xs">{isManager && todoMemberFilter !== null ? 'No tasks for this member today.' : 'Nothing scheduled today!'}</p>
               </div>
             ) : (
               <>
-                {todayTodos.map(todo => (
-                  <div
-                    key={todo.id}
-                    className={`flex items-start gap-3 p-3 rounded-lg mb-2 border transition-all ${
-                      todo.done
-                        ? 'bg-gray-50 dark:bg-gray-900/50 border-border opacity-60'
-                        : 'bg-gray-50 dark:bg-gray-900/30 border-border'
-                    }`}
-                  >
-                    <button
-                      onClick={() => handleToggleTodo(todo)}
-                      className={`w-5 h-5 rounded flex-shrink-0 flex items-center justify-center border-2 transition-colors ${
-                        todo.done ? 'bg-green-500 border-green-500' : 'border-gray-300 dark:border-gray-600'
+                {todayTodos.map(todo => {
+                  const overdue = !todo.done && new Date(todo.scheduled_date) < new Date();
+                  const { assignedAcc, creatorAcc, isAssigned } = getTodoAccounts(todo);
+                  const canEdit = isManager || todo.assigned_to === currentUser?.id || todo.owner_id === currentUser?.id;
+
+                  return (
+                    <div
+                      key={todo.id}
+                      className={`flex items-start gap-3 p-3 rounded-lg mb-2 border transition-all ${
+                        todo.done
+                          ? 'bg-gray-50 dark:bg-gray-900/50 border-border opacity-60'
+                          : overdue
+                            ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
+                            : 'bg-gray-50 dark:bg-gray-900/30 border-border'
                       }`}
                     >
-                      {todo.done && <i className="fa-solid fa-check text-white text-xs"></i>}
-                    </button>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap mb-1">
-                        <span className="text-[11px] font-bold" style={{ color: ACTIVITY_COLORS[todo.stage as ActivityType] || '#6366f1' }}>
-                          {todo.stage || 'Task'}
-                        </span>
-                        <span className={`text-xs font-semibold ${todo.done ? 'line-through' : ''}`}>{todo.lead_name}</span>
-                        <span className="text-[10px] text-text-muted ml-auto">{todo.scheduled_time}</span>
+                      <button
+                        onClick={() => canEdit && handleToggleTodo(todo)}
+                        className={`w-5 h-5 rounded flex-shrink-0 flex items-center justify-center border-2 transition-colors ${
+                          todo.done ? 'bg-green-500 border-green-500' : 'border-gray-300 dark:border-gray-600'
+                        } ${canEdit ? 'cursor-pointer' : 'cursor-default'}`}
+                      >
+                        {todo.done && <i className="fa-solid fa-check text-white text-xs"></i>}
+                      </button>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap mb-1">
+                          <span className="text-[11px] font-bold" style={{ color: ACTIVITY_COLORS[todo.stage as ActivityType] || '#6366f1' }}>
+                            {todo.stage || 'Task'}
+                          </span>
+                          <span className={`text-xs font-semibold ${todo.done ? 'line-through' : ''}`}>{todo.lead_name}</span>
+
+                          {/* Assignment tag */}
+                          {isManager ? (
+                            // Manager sees assigned person avatar
+                            assignedAcc && (
+                              <span className="inline-flex items-center gap-1 text-[9px] font-bold px-1 py-0.5 rounded" style={{ background: assignedAcc.color + '22', color: assignedAcc.color }}>
+                                <span className="w-3 h-3 rounded-full flex items-center justify-center text-[6px] text-white" style={{ background: assignedAcc.color }}>{assignedAcc.initials}</span>
+                                {assignedAcc.name.split(' ').slice(-1)[0]}
+                              </span>
+                            )
+                          ) : (
+                            // Member sees "from Manager" tag if applicable
+                            isAssigned && creatorAcc && creatorAcc.role === 'manager' && (
+                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 flex items-center gap-1">
+                                <i className="fa-solid fa-crown text-[7px]"></i>
+                                from {creatorAcc.name.split(' ')[0]}
+                              </span>
+                            )
+                          )}
+
+                          {overdue && !todo.done && (
+                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400">OVERDUE</span>
+                          )}
+                          <span className="text-[10px] text-text-muted ml-auto">{todo.scheduled_time || ''}</span>
+                        </div>
+                        <p className="text-xs text-text-secondary truncate">{todo.agenda}</p>
                       </div>
-                      <p className="text-xs text-text-secondary truncate">{todo.agenda}</p>
+                      {canEdit && (
+                        <button
+                          onClick={() => handleDeleteTodo(todo.id)}
+                          className="text-text-muted hover:text-red-500 transition-colors px-1"
+                        >
+                          <i className="fa-solid fa-xmark text-xs"></i>
+                        </button>
+                      )}
                     </div>
-                    <button
-                      onClick={() => handleDeleteTodo(todo.id)}
-                      className="text-text-muted hover:text-red-500 transition-colors"
-                    >
-                      <i className="fa-solid fa-xmark text-xs"></i>
-                    </button>
-                  </div>
-                ))}
+                  );
+                })}
                 {upcomingTodos.length > 0 && (
                   <>
                     <p className="text-[10px] font-bold text-text-muted uppercase tracking-wider my-3">Upcoming</p>
-                    {upcomingTodos.map(todo => (
-                      <div
-                        key={todo.id}
-                        className="flex items-start gap-3 p-3 rounded-lg mb-2 border border-border bg-gray-50 dark:bg-gray-900/30"
-                      >
-                        <button
-                          onClick={() => handleToggleTodo(todo)}
-                          className="w-5 h-5 rounded flex-shrink-0 flex items-center justify-center border-2 border-gray-300 dark:border-gray-600"
-                        />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap mb-1">
-                            <span className="text-[11px] font-bold" style={{ color: ACTIVITY_COLORS[todo.stage as ActivityType] || '#6366f1' }}>
-                              {todo.stage || 'Task'}
-                            </span>
-                            <span className="text-xs font-semibold">{todo.lead_name}</span>
-                            <span className="text-[10px] text-text-muted ml-auto">{formatDate(todo.scheduled_date)}</span>
+                    {upcomingTodos.map(todo => {
+                      const { assignedAcc, creatorAcc, isAssigned } = getTodoAccounts(todo);
+                      const canEdit = isManager || todo.assigned_to === currentUser?.id || todo.owner_id === currentUser?.id;
+
+                      return (
+                        <div
+                          key={todo.id}
+                          className="flex items-start gap-3 p-3 rounded-lg mb-2 border border-border bg-gray-50 dark:bg-gray-900/30"
+                        >
+                          <button
+                            onClick={() => canEdit && handleToggleTodo(todo)}
+                            className="w-5 h-5 rounded flex-shrink-0 flex items-center justify-center border-2 border-gray-300 dark:border-gray-600"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap mb-1">
+                              <span className="text-[11px] font-bold" style={{ color: ACTIVITY_COLORS[todo.stage as ActivityType] || '#6366f1' }}>
+                                {todo.stage || 'Task'}
+                              </span>
+                              <span className="text-xs font-semibold">{todo.lead_name}</span>
+
+                              {isManager && assignedAcc && (
+                                <span className="inline-flex items-center gap-1 text-[9px] font-bold px-1 py-0.5 rounded" style={{ background: assignedAcc.color + '22', color: assignedAcc.color }}>
+                                  <span className="w-3 h-3 rounded-full flex items-center justify-center text-[6px] text-white" style={{ background: assignedAcc.color }}>{assignedAcc.initials}</span>
+                                  {assignedAcc.name.split(' ').slice(-1)[0]}
+                                </span>
+                              )}
+
+                              {!isManager && isAssigned && creatorAcc && creatorAcc.role === 'manager' && (
+                                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 flex items-center gap-1">
+                                  <i className="fa-solid fa-crown text-[7px]"></i>
+                                  from {creatorAcc.name.split(' ')[0]}
+                                </span>
+                              )}
+
+                              <span className="text-[9px] text-text-muted ml-auto">{formatDate(todo.scheduled_date)}</span>
+                            </div>
+                            <p className="text-xs text-text-secondary truncate">{todo.agenda}</p>
                           </div>
-                          <p className="text-xs text-text-secondary truncate">{todo.agenda}</p>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </>
                 )}
               </>
@@ -418,6 +603,7 @@ export function ActivityLog() {
             ) : (
               coldAlerts.map(lead => {
                 const cfg = TEMP_CONFIG[lead.temp];
+                const ownerAcc = isManager ? ACCOUNTS.find(a => a.id === lead.owner_id) : null;
                 return (
                   <div
                     key={lead.id}
@@ -436,6 +622,11 @@ export function ActivityLog() {
                         <span className="px-2 py-0.5 rounded text-[10px] font-semibold" style={{ background: STAGE_COLORS[lead.stage as keyof typeof STAGE_COLORS] + '20', color: STAGE_COLORS[lead.stage as keyof typeof STAGE_COLORS] }}>
                           {lead.stage}
                         </span>
+                        {ownerAcc && (
+                          <span className="text-[9px] font-bold px-1 py-0.5 rounded" style={{ background: ownerAcc.color + '22', color: ownerAcc.color }}>
+                            {ownerAcc.initials}
+                          </span>
+                        )}
                         <span
                           className="text-[9px] font-bold px-1.5 py-0.5 rounded"
                           style={{ background: cfg.bg, color: cfg.color, border: `1px solid ${cfg.color}40` }}
@@ -448,7 +639,7 @@ export function ActivityLog() {
                       </p>
                     </div>
                     <button
-                      onClick={() => { setShowLogModal(true); }}
+                      onClick={() => { setModalMode('log'); setShowLogModal(true); }}
                       className="px-2 py-1 text-[10px] font-semibold rounded border border-border dark:border-border hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
                     >
                       <i className="fa-solid fa-plus"></i> Log
@@ -542,7 +733,7 @@ export function ActivityLog() {
               className="ml-auto px-3 py-1.5 text-xs rounded-lg border border-border dark:border-border bg-transparent"
             >
               <option value="">All members</option>
-              {teamMembers.map(m => (
+              {ACCOUNTS.filter(a => a.role === 'member').map(m => (
                 <option key={m.id} value={m.id}>{m.name}</option>
               ))}
             </select>
@@ -576,7 +767,7 @@ export function ActivityLog() {
                 <div className="space-y-2">
                   {acts.map(activity => {
                     const cfg = TYPE_CONFIG[activity.type as ActivityType];
-                    const owner = teamMembers.find(m => m.id === activity.owner_id);
+                    const ownerAcc = ACCOUNTS.find(a => a.id === activity.owner_id);
                     return (
                       <div
                         key={activity.id}
@@ -622,15 +813,15 @@ export function ActivityLog() {
                                   <i className="fa-solid fa-arrow-right mr-1"></i>{activity.next_action}
                                 </span>
                               )}
-                              {owner && (
+                              {ownerAcc && (
                                 <span className="flex items-center gap-1.5 text-[11px] text-text-muted ml-auto">
                                   <span
                                     className="w-5 h-5 rounded-full flex items-center justify-center text-[8px] font-bold text-white"
-                                    style={{ background: owner.color }}
+                                    style={{ background: ownerAcc.color }}
                                   >
-                                    {owner.initials}
+                                    {ownerAcc.initials}
                                   </span>
-                                  {owner.name.split(' ')[0]}
+                                  {ownerAcc.name.split(' ')[0]}
                                 </span>
                               )}
                               <span className="text-[10px] text-text-muted">{timeAgo(activity.created_at)}</span>
@@ -699,7 +890,7 @@ export function ActivityLog() {
                 leadStatusList.map(lead => {
                   const cfg = TEMP_CONFIG[lead.temp];
                   const daysColor = lead.days >= leadRules.cold_days ? '#991b1b' : lead.days >= leadRules.warm_days ? '#92400e' : '#065f46';
-                  const owner = teamMembers.find(m => m.id === lead.owner_id);
+                  const owner = ACCOUNTS.find(a => a.id === lead.owner_id);
                   const sparkPct = Math.min(lead.actCount * 20, 100);
                   return (
                     <tr key={lead.id} className="border-b border-border dark:border-border hover:bg-accent/5 cursor-pointer">
@@ -775,10 +966,18 @@ export function ActivityLog() {
                       <td className="px-4 py-3">
                         <div className="flex gap-1">
                           <button
-                            onClick={() => setShowLogModal(true)}
+                            onClick={() => { setModalMode('log'); setShowLogModal(true); }}
                             className="w-8 h-8 rounded flex items-center justify-center border border-border dark:border-border hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+                            title="Log activity"
                           >
                             <i className="fa-solid fa-plus text-xs text-text-muted"></i>
+                          </button>
+                          <button
+                            onClick={() => { setModalMode('schedule'); setShowLogModal(true); }}
+                            className="w-8 h-8 rounded flex items-center justify-center border border-border dark:border-border hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+                            title="Schedule"
+                          >
+                            <i className="fa-solid fa-calendar-plus text-xs text-text-muted"></i>
                           </button>
                         </div>
                       </td>

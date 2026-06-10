@@ -461,13 +461,15 @@ export function useFilteredData() {
     if (!currentUser) return [];
 
     if (currentUser.role === 'member') {
-      return scheduledTodos.filter(t => t.owner_id === currentUser.id);
+      // Member sees tasks they created OR tasks assigned to them
+      return scheduledTodos.filter(t => t.owner_id === currentUser.id || t.assigned_to === currentUser.id);
     }
 
     if (selectedMemberId === null) {
       return scheduledTodos;
     }
-    return scheduledTodos.filter(t => t.owner_id === selectedMemberId);
+    // Filter by assigned_to OR owner_id (if not assigned)
+    return scheduledTodos.filter(t => t.assigned_to === selectedMemberId || (!t.assigned_to && t.owner_id === selectedMemberId));
   }, [currentUser, selectedMemberId, scheduledTodos]);
 
   return {
