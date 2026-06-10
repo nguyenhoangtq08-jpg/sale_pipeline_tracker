@@ -12,12 +12,6 @@ export interface Lead {
   owner_id: string;
   created_at: string;
   updated_at: string;
-  // Lead-specific fields
-  lead_status: 'New' | 'Converted' | 'Rejected';
-  industry: string | null;
-  website: string | null;
-  city: string | null;
-  assigned_to: string | null;
   // Deal-specific fields
   close_date?: string | null;
   last_activity?: string;
@@ -104,8 +98,6 @@ export type Page = 'dashboard' | 'leads' | 'deals' | 'activities' | 'ai-email' |
 export const STAGES: Stage[] = ['Prospecting', 'Qualification', 'Proposal', 'Negotiation', 'Closed Won', 'Closed Lost'];
 export const SOURCES: Source[] = ['Website', 'Referral', 'Event', 'Cold Call', 'Other'];
 export const ACTIVITY_TYPES: ActivityType[] = ['Call', 'Email', 'Meeting', 'Note'];
-export const INDUSTRIES = ['Consulting', 'Education', 'FMCG', 'Finance', 'Healthcare', 'Logistics', 'Retail', 'Technology'] as const;
-export const LEAD_STATUSES = ['New', 'Converted', 'Rejected'] as const;
 
 export const STAGE_COLORS: Record<Stage, string> = {
   'Prospecting': '#6366f1',
