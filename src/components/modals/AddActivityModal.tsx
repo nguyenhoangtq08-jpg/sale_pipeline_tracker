@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Modal } from '../shared/Modal';
 import { Badge } from '../shared/Badge';
-import { ACTIVITY_TYPES, STAGE_COLORS, ACCOUNTS, type ActivityType, type ActivityMode, type Lead } from '../../types';
+import { ACTIVITY_TYPES, STAGE_COLORS, type ActivityType, type ActivityMode, type Lead } from '../../types';
 
 interface AddActivityModalProps {
   isOpen: boolean;
@@ -14,7 +14,6 @@ interface AddActivityModalProps {
 
 export function AddActivityModal({ isOpen, onClose, mode, onModeChange, preselectedLead }: AddActivityModalProps) {
   const { leads, currentUser, addActivity, addScheduledTodo, showToast } = useApp();
-  const isManager = currentUser?.role === 'manager';
 
   const [logForm, setLogForm] = useState({
     type: 'Call' as ActivityType,
@@ -29,15 +28,13 @@ export function AddActivityModal({ isOpen, onClose, mode, onModeChange, preselec
   });
 
   const [scheduleForm, setScheduleForm] = useState({
-    type: 'Call' as ActivityType,
     lead_id: preselectedLead?.id || '',
     lead_name: preselectedLead?.name || '',
     company: preselectedLead?.company || '',
     stage: preselectedLead?.stage || '',
-    scheduled_date: (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().split('T')[0] })(),
+    scheduled_date: new Date().toISOString().split('T')[0],
     scheduled_time: '09:00',
     agenda: '',
-    assigned_to: currentUser?.id || '0',
   });
 
   const handleSelectLead = (lead: Lead | undefined) => {
@@ -95,8 +92,6 @@ export function AddActivityModal({ isOpen, onClose, mode, onModeChange, preselec
       return;
     }
 
-    const assignedTo = isManager ? scheduleForm.assigned_to : currentUser?.id || '0';
-
     await addScheduledTodo({
       lead_id: scheduleForm.lead_id || null,
       lead_name: scheduleForm.lead_name,
@@ -107,7 +102,6 @@ export function AddActivityModal({ isOpen, onClose, mode, onModeChange, preselec
       agenda: scheduleForm.agenda,
       done: false,
       owner_id: currentUser?.id || '0',
-      assigned_to: assignedTo,
     });
 
     resetForms();
@@ -127,85 +121,60 @@ export function AddActivityModal({ isOpen, onClose, mode, onModeChange, preselec
       next_action: '',
     });
     setScheduleForm({
-      type: 'Call',
       lead_id: '',
       lead_name: '',
       company: '',
       stage: '',
-      scheduled_date: (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().split('T')[0] })(),
+      scheduled_date: new Date().toISOString().split('T')[0],
       scheduled_time: '09:00',
       agenda: '',
-      assigned_to: currentUser?.id || '0',
     });
   };
 
   const selectedLead = leads.find(l => l.id === logForm.lead_id);
-  const selectedAssignee = ACCOUNTS.find(a => a.id === scheduleForm.assigned_to);
 
   return (
     <Modal
       isOpen={isOpen}
       onClose={() => { resetForms(); onClose(); }}
-      title="Log / Schedule"
+      title={mode === 'log' ? 'Log Activity' : 'Schedule To-Do'}
       size="lg"
     >
       {/* Mode Toggle */}
       <div className="flex rounded-lg bg-gray-100 dark:bg-gray-800 p-1 mb-6">
         <button
           onClick={() => onModeChange('log')}
-          className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-all flex items-center justify-center gap-2 ${
+          className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-all ${
             mode === 'log'
-              ? 'bg-accent text-white shadow-sm'
+              ? 'bg-bg-card dark:bg-bg-card text-text-primary dark:text-white shadow-sm'
               : 'text-text-muted hover:text-text-primary dark:hover:text-white'
           }`}
         >
-          <i className="fa-solid fa-check-circle"></i>
-          Log (Done)
+          <i className="fa-solid fa-check-circle mr-2"></i>
+          Log Done
         </button>
         <button
           onClick={() => onModeChange('schedule')}
-          className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-all flex items-center justify-center gap-2 ${
+          className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-all ${
             mode === 'schedule'
-              ? 'bg-accent text-white shadow-sm'
+              ? 'bg-bg-card dark:bg-bg-card text-text-primary dark:text-white shadow-sm'
               : 'text-text-muted hover:text-text-primary dark:hover:text-white'
           }`}
         >
-          <i className="fa-solid fa-calendar-plus"></i>
-          Schedule (To-Do)
+          <i className="fa-solid fa-calendar-plus mr-2"></i>
+          Schedule To-Do
         </button>
-      </div>
-
-      {/* Activity Type */}
-      <div className="mb-4">
-        <label className="block text-[11px] font-bold uppercase tracking-wider text-text-muted mb-2">Activity Type</label>
-        <select
-          value={mode === 'log' ? logForm.type : scheduleForm.type}
-          onChange={(e) => {
-            const val = e.target.value as ActivityType;
-            if (mode === 'log') {
-              setLogForm({ ...logForm, type: val });
-            } else {
-              setScheduleForm({ ...scheduleForm, type: val });
-            }
-          }}
-          className="w-full px-4 py-2.5 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white"
-        >
-          <option value="Call">📞 Call</option>
-          <option value="Email">📧 Email</option>
-          <option value="Meeting">🤝 Meeting</option>
-          <option value="Note">📝 Note</option>
-        </select>
       </div>
 
       {/* Lead Selection */}
       <div className="mb-4">
-        <label className="block text-[11px] font-bold uppercase tracking-wider text-text-muted mb-2">Lead</label>
+        <label className="block text-sm font-medium text-text-primary dark:text-white mb-1">Select Lead</label>
         <select
           value={logForm.lead_id}
           onChange={(e) => handleSelectLead(leads.find(l => l.id === e.target.value))}
-          className="w-full px-4 py-2.5 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white"
+          className="w-full px-4 py-2 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white"
         >
-          <option value="">Select a lead...</option>
+          <option value="">Choose a lead...</option>
           {leads.map(l => (
             <option key={l.id} value={l.id}>{l.name} {l.company ? `- ${l.company}` : ''}</option>
           ))}
@@ -214,7 +183,7 @@ export function AddActivityModal({ isOpen, onClose, mode, onModeChange, preselec
 
       {/* Selected Lead Info */}
       {selectedLead && (
-        <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-border dark:border-border">
+        <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg">
           <div className="flex items-center gap-3">
             <div
               className="w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold"
@@ -238,49 +207,58 @@ export function AddActivityModal({ isOpen, onClose, mode, onModeChange, preselec
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-[11px] font-bold uppercase tracking-wider text-text-muted mb-2">Activity Date</label>
+              <label className="block text-sm font-medium text-text-primary dark:text-white mb-1">Type</label>
+              <select
+                value={logForm.type}
+                onChange={(e) => setLogForm({ ...logForm, type: e.target.value as ActivityType })}
+                className="w-full px-4 py-2 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white"
+              >
+                {ACTIVITY_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-text-primary dark:text-white mb-1">Activity Date</label>
               <input
                 type="date"
                 value={logForm.date}
                 onChange={(e) => setLogForm({ ...logForm, date: e.target.value })}
-                className="w-full px-4 py-2.5 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white"
+                className="w-full px-4 py-2 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white"
               />
             </div>
             <div>
-              <label className="block text-[11px] font-bold uppercase tracking-wider text-text-muted mb-2">Duration (min)</label>
+              <label className="block text-sm font-medium text-text-primary dark:text-white mb-1">Duration (min)</label>
               <input
                 type="number"
                 value={logForm.duration}
                 onChange={(e) => setLogForm({ ...logForm, duration: e.target.value })}
-                className="w-full px-4 py-2.5 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white"
-                placeholder="30"
+                className="w-full px-4 py-2 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-text-primary dark:text-white mb-1">Next Action</label>
+              <input
+                type="text"
+                value={logForm.next_action}
+                onChange={(e) => setLogForm({ ...logForm, next_action: e.target.value })}
+                className="w-full px-4 py-2 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white"
+                placeholder="Follow-up, Send proposal..."
               />
             </div>
           </div>
           <div>
-            <label className="block text-[11px] font-bold uppercase tracking-wider text-text-muted mb-2">Notes / What happened</label>
+            <label className="block text-sm font-medium text-text-primary dark:text-white mb-1">Notes</label>
             <textarea
               value={logForm.notes}
               onChange={(e) => setLogForm({ ...logForm, notes: e.target.value })}
               rows={3}
-              className="w-full px-4 py-2.5 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white resize-none"
-              placeholder="Key points, agenda, or what happened..."
-            />
-          </div>
-          <div>
-            <label className="block text-[11px] font-bold uppercase tracking-wider text-text-muted mb-2">Next Action</label>
-            <input
-              type="text"
-              value={logForm.next_action}
-              onChange={(e) => setLogForm({ ...logForm, next_action: e.target.value })}
-              className="w-full px-4 py-2.5 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white"
-              placeholder="e.g. Send proposal by Friday"
+              className="w-full px-4 py-2 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white resize-none"
+              placeholder="Activity details..."
             />
           </div>
           <button
             onClick={handleLogActivity}
             disabled={!logForm.lead_name.trim()}
-            className="w-full px-4 py-3 bg-accent text-white rounded-lg hover:bg-indigo-600 transition-colors disabled:opacity-50 font-semibold"
+            className="w-full px-4 py-2 bg-accent text-white rounded-lg hover:bg-indigo-600 transition-colors disabled:opacity-50"
           >
             <i className="fa-solid fa-check mr-2"></i>
             Log Activity
@@ -293,86 +271,41 @@ export function AddActivityModal({ isOpen, onClose, mode, onModeChange, preselec
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-[11px] font-bold uppercase tracking-wider text-text-muted mb-2">Scheduled Date</label>
+              <label className="block text-sm font-medium text-text-primary dark:text-white mb-1">Scheduled Date</label>
               <input
                 type="date"
                 value={scheduleForm.scheduled_date}
                 onChange={(e) => setScheduleForm({ ...scheduleForm, scheduled_date: e.target.value })}
-                className="w-full px-4 py-2.5 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white"
+                className="w-full px-4 py-2 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white"
               />
             </div>
             <div>
-              <label className="block text-[11px] font-bold uppercase tracking-wider text-text-muted mb-2">Scheduled Time</label>
+              <label className="block text-sm font-medium text-text-primary dark:text-white mb-1">Scheduled Time</label>
               <input
                 type="time"
                 value={scheduleForm.scheduled_time}
                 onChange={(e) => setScheduleForm({ ...scheduleForm, scheduled_time: e.target.value })}
-                className="w-full px-4 py-2.5 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white"
+                className="w-full px-4 py-2 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white"
               />
             </div>
           </div>
-
-          {/* Assign To - Manager only */}
-          {isManager && (
-            <div>
-              <label className="block text-[11px] font-bold uppercase tracking-wider text-text-muted mb-2 flex items-center gap-2">
-                <i className="fa-solid fa-user-plus text-accent"></i>
-                Assign To
-                <span className="font-normal text-[10px]">— who is responsible for this task</span>
-              </label>
-              <div className="grid grid-cols-2 gap-2">
-                {ACCOUNTS.map(a => {
-                  const isSelected = scheduleForm.assigned_to === a.id;
-                  return (
-                    <div
-                      key={a.id}
-                      onClick={() => setScheduleForm({ ...scheduleForm, assigned_to: a.id })}
-                      className={`flex items-center gap-2 p-2.5 rounded-lg border cursor-pointer transition-all ${
-                        isSelected
-                          ? 'border-accent bg-accent/10'
-                          : 'border-border hover:border-accent/50 bg-gray-50 dark:bg-gray-900/50'
-                      }`}
-                    >
-                      <div
-                        className="w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0"
-                        style={{ background: a.color }}
-                      >
-                        {a.initials}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs font-semibold text-text-primary dark:text-white truncate">
-                          {a.name.split(' ').slice(-1)[0]}
-                          {a.id === currentUser?.id && <span className="font-normal text-text-muted ml-1">(me)</span>}
-                        </p>
-                        <p className="text-[10px] text-text-muted">{a.roleLabel}</p>
-                      </div>
-                      {isSelected && (
-                        <i className="fa-solid fa-circle-check text-accent text-sm"></i>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
           <div>
-            <label className="block text-[11px] font-bold uppercase tracking-wider text-text-muted mb-2">Agenda / What to discuss</label>
+            <label className="block text-sm font-medium text-text-primary dark:text-white mb-1">Agenda</label>
             <textarea
               value={scheduleForm.agenda}
               onChange={(e) => setScheduleForm({ ...scheduleForm, agenda: e.target.value })}
               rows={3}
-              className="w-full px-4 py-2.5 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white resize-none"
-              placeholder="What needs to be discussed or accomplished..."
+              className="w-full px-4 py-2 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white resize-none"
+              placeholder="What needs to be done..."
             />
           </div>
           <button
             onClick={handleScheduleTodo}
             disabled={!scheduleForm.lead_name.trim() || !scheduleForm.agenda.trim()}
-            className="w-full px-4 py-3 bg-accent text-white rounded-lg hover:bg-indigo-600 transition-colors disabled:opacity-50 font-semibold flex items-center justify-center gap-2"
+            className="w-full px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors disabled:opacity-50"
           >
-            <i className="fa-solid fa-calendar-plus"></i>
-            Schedule
+            <i className="fa-solid fa-calendar-plus mr-2"></i>
+            Schedule To-Do
           </button>
         </div>
       )}

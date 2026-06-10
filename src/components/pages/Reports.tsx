@@ -163,45 +163,6 @@ export function Reports() {
   }, [filteredLeads]);
 
   const handleExport = () => {
-    let tableElement: HTMLTableElement | null = null;
-    let fileName = '';
-
-    switch (activeTab) {
-      case 'PIPELINE':
-        tableElement = pipelineTableRef.current;
-        fileName = 'SalesTrack_PIPELINE_Report.xls';
-        break;
-      case 'PERFORMANCE':
-        tableElement = performanceData.singleRep ? performanceRepTableRef.current : performanceMgrTableRef.current;
-        fileName = 'SalesTrack_PERFORMANCE_Report.xls';
-        break;
-      case 'SOURCING':
-        tableElement = sourcingTableRef.current;
-        fileName = 'SalesTrack_SOURCING_Report.xls';
-        break;
-    }
-
-    if (!tableElement) {
-      showToast('error', 'Unable to export: table not found');
-      return;
-    }
-
-    const dataBlobString = tableElement.outerHTML;
-    const baseUriLink = 'data:application/vnd.ms-excel,' + encodeURIComponent(dataBlobString);
-    const virtualAnchor = document.createElement('a');
-    virtualAnchor.href = baseUriLink;
-    virtualAnchor.download = fileName;
-    document.body.appendChild(virtualAnchor);
-    virtualAnchor.click();
-    document.body.removeChild(virtualAnchor);
-
-    showToast('success', 'Report exported successfully');
-  };
-
-  const handlePrint = () => {
-    window.print();
-  };
-
     showToast('info', 'Export feature coming soon');
   };
 
@@ -401,38 +362,6 @@ export function Reports() {
                 </tbody>
               </table>
             </div>
-          </div>
-        )}
-      </div>
-
-      {/* Tab 3: Lead Source ROI Attribution */}
-      <div className={`bg-bg-card dark:bg-bg-card rounded-xl border border-border shadow-sm overflow-hidden ${activeTab === 'SOURCING' ? 'block' : 'hidden'}`}>
-        <div className="px-4 py-3 bg-gray-50/60 dark:bg-gray-900/50 border-b border-border text-xs font-bold uppercase tracking-wide text-text-muted">
-          Lead Source ROI Attribution
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full" ref={sourcingTableRef} id="table-target-SOURCING">
-            <thead className="bg-gray-50 dark:bg-gray-900/50 border-b border-border">
-              <tr className="text-[10px] font-bold uppercase tracking-wider text-text-muted">
-                <th className="px-6 py-3.5 text-left">Source Channel Origin</th>
-                <th className="px-6 py-3.5 text-center">Total Ingested Leads</th>
-                <th className="px-6 py-3.5 text-center">Pipeline Conversion Rate</th>
-                <th className="px-6 py-3.5 text-right">Attributed Won Revenue</th>
-                <th className="px-6 py-3.5 text-right">Average Deal Size</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-              {sourcingData.map(row => (
-                <tr key={row.source} className="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition cursor-pointer">
-                  <td className="px-6 py-4 font-bold text-text-primary dark:text-white">{row.source}</td>
-                  <td className="px-6 py-4 text-center font-bold text-text-secondary">{row.benchmarkLeads}</td>
-                  <td className="px-6 py-4 text-center font-bold text-indigo-600 dark:text-indigo-400">{row.conversionRate}%</td>
-                  <td className="px-6 py-4 text-right font-bold text-emerald-600 dark:text-emerald-400">{formatCurrency(row.attributedRevenue)}</td>
-                  <td className="px-6 py-4 text-right font-bold text-indigo-700 dark:text-indigo-400">{formatCurrency(row.avgDealSize)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
           ) : (
             // Rep View - Card
             <div className="p-6">
