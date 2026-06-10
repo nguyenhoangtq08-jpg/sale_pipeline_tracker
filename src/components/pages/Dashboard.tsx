@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import {
   Chart as ChartJS,
   CategoryScale,
   LinearScale,
   BarElement,
+  LineElement,
+  PointElement,
   Title,
   Tooltip,
   Legend,
@@ -12,7 +14,6 @@ import {
 import { Bar, Doughnut } from 'react-chartjs-2';
 import { useApp, useFilteredData } from '../../context/AppContext';
 import { MetricCard } from '../shared/MetricCard';
-import { Badge } from '../shared/Badge';
 import { STAGE_COLORS, STAGES, type Activity } from '../../types';
 import { AddActivityModal } from '../modals/AddActivityModal';
 
@@ -20,376 +21,525 @@ ChartJS.register(
   CategoryScale,
   LinearScale,
   BarElement,
+  LineElement,
+  PointElement,
   Title,
   Tooltip,
   Legend,
   ArcElement
 );
 
-// Exact sample data: 8 leads, 10 activities, 5 scheduled todos
-const SAMPLE_LEADS = [
-  { name: 'Nguyen Thi Linh', company: 'TechCorp Vietnam', dealSize: 45000, source: 'Website', stage: 'Qualification', probability: 40, owner_id: '1' },
-  { name: 'Tran Minh Duc', company: 'ABC Manufacturing', dealSize: 78000, source: 'Referral', stage: 'Proposal', probability: 60, owner_id: '2' },
-  { name: 'Pham Thi Hoa', company: 'Global Solutions Ltd', dealSize: 32500, source: 'Event', stage: 'Negotiation', probability: 80, owner_id: '1' },
-  { name: 'Le Van Nam', company: 'VietnamTrade JSC', dealSize: 92500, source: 'Cold Call', stage: 'Prospecting', probability: 20, owner_id: '3' },
-  { name: 'Vo Thi Mai', company: 'Pacific Foods Inc', dealSize: 56000, source: 'Referral', stage: 'Closed Won', probability: 100, owner_id: '1' },
-  { name: 'Dang Quoc Hung', company: 'SME Solutions', dealSize: 28750, source: 'Website', stage: 'Closed Lost', probability: 0, owner_id: '2' },
-  { name: 'Bui Thi Lan', company: 'Innovatech Vietnam', dealSize: 112000, source: 'Event', stage: 'Proposal', probability: 65, owner_id: '3' },
-  { name: 'Hoang Van Tung', company: 'DataPro Services', dealSize: 47000, source: 'Website', stage: 'Qualification', probability: 35, owner_id: '1' },
-];
-
-const SAMPLE_ACTIVITIES = [
-  { type: 'Call', leadName: 'Nguyen Thi Linh', stage: 'Qualification', owner_id: '1', notes: 'Discussed product features and pricing options for enterprise license' },
-  { type: 'Email', leadName: 'Tran Minh Duc', stage: 'Proposal', owner_id: '2', notes: 'Sent revised proposal document with updated pricing' },
-  { type: 'Meeting', leadName: 'Pham Thi Hoa', stage: 'Negotiation', owner_id: '1', notes: 'Contract review meeting, final terms discussed and agreed' },
-  { type: 'Call', leadName: 'Le Van Nam', stage: 'Prospecting', owner_id: '3', notes: 'Initial discovery call, identified key decision makers' },
-  { type: 'Note', leadName: 'Bui Thi Lan', stage: 'Proposal', owner_id: '3', notes: 'Need to follow up next week about timeline and implementation' },
-  { type: 'Call', leadName: 'Hoang Van Tung', stage: 'Qualification', owner_id: '1', notes: 'Technical requirements gathering session scheduled' },
-  { type: 'Email', leadName: 'Nguyen Thi Linh', stage: 'Qualification', owner_id: '1', notes: 'Sent product demo link and documentation' },
-  { type: 'Meeting', leadName: 'Tran Minh Duc', stage: 'Proposal', owner_id: '2', notes: 'Demo presentation completed, positive feedback received' },
-  { type: 'Call', leadName: 'Vo Thi Mai', stage: 'Closed Won', owner_id: '1', notes: 'Final contract signed, onboarding scheduled for next week' },
-  { type: 'Email', leadName: 'Pham Thi Hoa', stage: 'Negotiation', owner_id: '1', notes: 'Legal review update -  pending final approval' },
-];
-
-const SAMPLE_TODOS = [
-  { leadName: 'Nguyen Thi Linh', company: 'TechCorp Vietnam', stage: 'Qualification', owner_id: '1', scheduledDate: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], scheduledTime: '10:00', agenda: 'Follow up on pricing discussion' },
-  { leadName: 'Tran Minh Duc', company: 'ABC Manufacturing', stage: 'Proposal', owner_id: '2', scheduledDate: new Date(Date.now() + 1 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], scheduledTime: '14:30', agenda: 'Contract negotiation call' },
-  { leadName: 'Le Van Nam', company: 'VietnamTrade JSC', stage: 'Prospecting', owner_id: '3', scheduledDate: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], scheduledTime: '09:00', agenda: 'Product demo presentation' },
-  { leadName: 'Bui Thi Lan', company: 'Innovatech Vietnam', stage: 'Proposal', owner_id: '3', scheduledDate: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], scheduledTime: '15:00', agenda: 'Technical architecture review' },
-  { leadName: 'Hoang Van Tung', company: 'DataPro Services', stage: 'Qualification', owner_id: '1', scheduledDate: new Date(Date.now() + 4 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], scheduledTime: '11:00', agenda: 'Requirements gathering session' },
-];
-
-function timeAgo(date: string): string {
-  const seconds = Math.floor((new Date().getTime() - new Date(date).getTime()) / 1000);
-  if (seconds < 60) return 'Just now';
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
-}
+type PeriodPreset = 'QUARTER' | 'MONTH' | 'YEAR';
 
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value);
 }
 
-async function loadSampleData(
-  addLead: Function,
-  addActivity: Function,
-  addScheduledTodo: Function,
-  showToast: Function,
-  setLoading: Function
-) {
-  setLoading(true);
+function formatShortDate(dateStr: string): string {
+  return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
 
-  // Load exactly 8 leads
-  for (const lead of SAMPLE_LEADS) {
-    await addLead({
-      name: lead.name,
-      company: lead.company,
-      email: null,
-      phone: null,
-      deal_size: lead.dealSize,
-      source: lead.source,
-      stage: lead.stage,
-      probability: lead.probability,
-      notes: null,
-      owner_id: lead.owner_id,
-    });
+function formatFullDate(dateStr: string): string {
+  return new Date(dateStr).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+const STAGE_BADGE_CLASSES: Record<string, string> = {
+  'Prospecting': 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300',
+  'Qualification': 'bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400',
+  'Proposal': 'bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400',
+  'Negotiation': 'bg-orange-50 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400',
+  'Closed Won': 'bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400',
+  'Closed Lost': 'bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-400',
+};
+
+const ACTIVITY_THEME: Record<string, { bg: string; border: string; text: string; icon: string }> = {
+  'Call': { bg: 'bg-emerald-50', border: 'border-emerald-200/60', text: 'text-emerald-700', icon: 'fa-phone' },
+  'Email': { bg: 'bg-blue-50', border: 'border-blue-200/60', text: 'text-blue-700', icon: 'fa-envelope' },
+  'Meeting': { bg: 'bg-purple-50', border: 'border-purple-200/60', text: 'text-purple-700', icon: 'fa-handshake' },
+  'Note': { bg: 'bg-slate-50', border: 'border-slate-200/60', text: 'text-slate-700', icon: 'fa-note-sticky' },
+};
+
+function getPeriodDates(preset: PeriodPreset): { start: string; end: string } {
+  const now = new Date('2026-06-10'); // Use consistent baseline date
+  const year = now.getFullYear();
+  if (preset === 'QUARTER') {
+    return { start: `${year}-04-01`, end: `${year}-06-30` };
   }
-
-  // Load exactly 10 activities
-  for (const activity of SAMPLE_ACTIVITIES) {
-    await addActivity({
-      type: activity.type,
-      lead_id: null,
-      lead_name: activity.leadName,
-      stage: activity.stage,
-      company: null,
-      date: new Date().toISOString().split('T')[0],
-      duration: activity.type === 'Meeting' ? 60 : activity.type === 'Call' ? 15 : 0,
-      notes: activity.notes,
-      next_action: null,
-      owner_id: activity.owner_id,
-    });
+  if (preset === 'MONTH') {
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    return { start: `${year}-${m}-01`, end: `${year}-${m}-${String(now.getDate()).padStart(2, '0')}` };
   }
-
-  // Load exactly 5 scheduled todos
-  for (const todo of SAMPLE_TODOS) {
-    await addScheduledTodo({
-      lead_id: null,
-      lead_name: todo.leadName,
-      company: todo.company,
-      stage: todo.stage,
-      scheduled_date: todo.scheduledDate,
-      scheduled_time: todo.scheduledTime,
-      agenda: todo.agenda,
-      done: false,
-      owner_id: todo.owner_id,
-    });
-  }
-
-  showToast('success', 'Sample data loaded: 8 leads, 10 activities, 5 scheduled tasks');
-  setLoading(false);
+  return { start: `${year}-01-01`, end: `${year}-12-31` };
 }
 
 export function Dashboard() {
-  const { addLead, addActivity, addScheduledTodo, showToast, setSelectedActivity, currentUser } = useApp();
-  const { getFilteredLeads, getFilteredActivities, getFilteredScheduledTodos } = useFilteredData();
-  const [loadingSample, setLoadingSample] = useState(false);
+  const { currentUser, setSelectedActivity, setCurrentPage, showToast, darkMode } = useApp();
+  const { getFilteredLeads, getFilteredActivities } = useFilteredData();
+
+  const [periodPreset, setPeriodPreset] = useState<PeriodPreset>('QUARTER');
+  const [startDate, setStartDate] = useState('2026-04-01');
+  const [endDate, setEndDate] = useState('2026-06-30');
   const [showQuickLogModal, setShowQuickLogModal] = useState(false);
+  const [timelineRepFilter, setTimelineRepFilter] = useState<string>('ALL');
 
-  const filteredLeads = getFilteredLeads();
-  const filteredActivities = getFilteredActivities();
-  const filteredTodos = getFilteredScheduledTodos();
+  const isManager = currentUser?.role === 'manager';
 
-  const totalPipeline = filteredLeads
-    .filter(l => !['Closed Won', 'Closed Lost'].includes(l.stage))
-    .reduce((sum, l) => sum + Number(l.deal_size), 0);
+  // Apply period preset
+  const handlePresetChange = useCallback((preset: PeriodPreset) => {
+    setPeriodPreset(preset);
+    const dates = getPeriodDates(preset);
+    setStartDate(dates.start);
+    setEndDate(dates.end);
+  }, []);
 
-  const weightedForecast = filteredLeads
-    .filter(l => !['Closed Won', 'Closed Lost'].includes(l.stage))
-    .reduce((sum, l) => sum + Number(l.deal_size) * (l.probability / 100), 0);
+  // Filter leads by date range + role
+  const allLeads = getFilteredLeads();
+  const allActivities = getFilteredActivities();
 
-  const wonLeads = filteredLeads.filter(l => l.stage === 'Closed Won');
-  const lostLeads = filteredLeads.filter(l => l.stage === 'Closed Lost');
-  const completedDeals = filteredLeads.filter(l => ['Closed Won', 'Closed Lost'].includes(l.stage));
-  const winRate = completedDeals.length > 0 ? Math.round((wonLeads.length / completedDeals.length) * 100) : 0;
+  const filteredLeads = useMemo(() => {
+    const start = new Date(startDate + 'T00:00:00');
+    const end = new Date(endDate + 'T23:59:59');
+    return allLeads.filter(l => {
+      const updated = new Date(l.updated_at);
+      return updated >= start && updated <= end;
+    });
+  }, [allLeads, startDate, endDate]);
 
-  const activeDeals = filteredLeads.filter(l => !['Closed Won', 'Closed Lost'].includes(l.stage)).length;
-  const pendingTodos = filteredTodos.filter(t => !t.done).length;
+  const filteredActivities = useMemo(() => {
+    const start = new Date(startDate + 'T00:00:00');
+    const end = new Date(endDate + 'T23:59:59');
+    return allActivities.filter(a => {
+      const updated = new Date(a.created_at);
+      return updated >= start && updated <= end;
+    });
+  }, [allActivities, startDate, endDate]);
 
-  const pipelineByStage = STAGES.map(stage => ({
-    stage,
-    count: filteredLeads.filter(l => l.stage === stage).length,
-    value: filteredLeads.filter(l => l.stage === stage).reduce((sum, l) => sum + Number(l.deal_size), 0),
-  }));
+  // ═══════════════════════════════════════════════════════════
+  // KPI CALCULATIONS
+  // ═══════════════════════════════════════════════════════════
 
-  const chartData = {
-    labels: pipelineByStage.map(p => p.stage),
-    datasets: [{
-      label: 'Leads',
-      data: pipelineByStage.map(p => p.count),
-      backgroundColor: STAGES.map(s => STAGE_COLORS[s]),
-      borderRadius: 6,
-    }],
+  const activeOpenDeals = filteredLeads.filter(l => !['Closed Won', 'Closed Lost'].includes(l.stage));
+  const wonDeals = filteredLeads.filter(l => l.stage === 'Closed Won');
+  const lostDeals = filteredLeads.filter(l => l.stage === 'Closed Lost');
+
+  const netOpenCount = activeOpenDeals.length;
+  const grossPipelineValue = activeOpenDeals.reduce((sum, d) => sum + Number(d.deal_size), 0);
+  const weightedForecastRevenue = activeOpenDeals.reduce((sum, d) => sum + Number(d.deal_size) * (d.probability / 100), 0);
+  const totalWonRevenue = wonDeals.reduce((sum, d) => sum + Number(d.deal_size), 0);
+  const totalLostRevenue = lostDeals.reduce((sum, d) => sum + Number(d.deal_size), 0);
+
+  const totalClosedValueSum = totalWonRevenue + totalLostRevenue;
+  const absoluteWinRate = totalClosedValueSum > 0 ? ((totalWonRevenue / totalClosedValueSum) * 100).toFixed(1) : '0.0';
+
+  // ═══════════════════════════════════════════════════════════
+  // CHART DATA: Mixed Bar/Line Pipeline Chart
+  // ═══════════════════════════════════════════════════════════
+
+  const pipelineStages = ['Prospecting', 'Qualification', 'Proposal', 'Negotiation'];
+  const stageVolumes = pipelineStages.map(s => filteredLeads.filter(d => d.stage === s).length);
+  const stageValues = pipelineStages.map(s => filteredLeads.filter(d => d.stage === s).reduce((sum, d) => sum + Number(d.deal_size), 0));
+
+  const mixedChartData = {
+    labels: pipelineStages,
+    datasets: [
+      {
+        type: 'line' as const,
+        label: 'Pipeline Capacity Value ($)',
+        data: stageValues,
+        borderColor: '#6366f1',
+        backgroundColor: '#6366f1',
+        borderWidth: 3.5,
+        pointRadius: 6,
+        pointHoverRadius: 8,
+        pointBackgroundColor: '#ffffff',
+        pointBorderColor: '#6366f1',
+        pointBorderWidth: 2.5,
+        tension: 0.15,
+        yAxisID: 'yValue',
+        pointStyle: 'line' as const,
+      },
+      {
+        type: 'bar' as const,
+        label: 'Deals Volume (Count)',
+        data: stageVolumes,
+        backgroundColor: [
+          'rgba(148, 163, 184, 0.85)',
+          'rgba(59, 130, 246, 0.85)',
+          'rgba(245, 158, 11, 0.85)',
+          'rgba(249, 115, 22, 0.85)',
+        ],
+        borderColor: ['#475569', '#1d4ed8', '#b45309', '#c2410c'],
+        borderWidth: 1.5,
+        borderRadius: 6,
+        yAxisID: 'yVolume',
+        barPercentage: 0.45,
+        pointStyle: 'rect' as const,
+      },
+    ],
   };
 
-  const chartOptions = {
+  const textColor = darkMode ? '#f1f5f9' : '#334155';
+  const gridColor = darkMode ? '#334155' : '#f1f5f9';
+
+  const mixedChartOptions = {
     responsive: true,
     maintainAspectRatio: false,
-    plugins: {
-      legend: { display: false },
-      tooltip: {
-        backgroundColor: '#0f172a',
-        titleColor: '#fff',
-        bodyColor: '#fff',
-        padding: 12,
-        cornerRadius: 8,
-      },
-    },
     scales: {
       x: {
         grid: { display: false },
-        ticks: { color: '#64748b', font: { size: 11 } },
+        ticks: { font: { family: 'Plus Jakarta Sans', weight: '700' as const, size: 11 }, color: textColor },
       },
-      y: {
-        grid: { color: '#e2e8f0' },
-        ticks: { color: '#64748b', font: { size: 11 } },
+      yVolume: {
+        type: 'linear' as const,
+        position: 'left' as const,
+        title: { display: true, text: 'Volume Count', font: { family: 'Plus Jakarta Sans', weight: '800' as const, size: 11 }, color: textColor },
+        grid: { color: gridColor },
+        ticks: { stepSize: 1, font: { family: 'Plus Jakarta Sans', weight: '700' as const }, color: textColor },
+      },
+      yValue: {
+        type: 'linear' as const,
+        position: 'right' as const,
+        title: { display: true, text: 'Financial Capacity ($)', font: { family: 'Plus Jakarta Sans', weight: '800' as const, size: 11 }, color: textColor },
+        grid: { display: false },
+        ticks: {
+          font: { family: 'Plus Jakarta Sans', weight: '700' as const },
+          color: textColor,
+          callback: function(v: number) { return '$' + (v >= 1000 ? (v / 1000) + 'k' : v); },
+        },
+      },
+    },
+    plugins: {
+      legend: {
+        position: 'top' as const,
+        labels: {
+          font: { family: 'Plus Jakarta Sans', weight: '700' as const, size: 12 },
+          color: textColor,
+          usePointStyle: true,
+          boxWidth: 16,
+        },
       },
     },
   };
 
-  const activityBreakdown = {
-    labels: ['Call', 'Email', 'Meeting', 'Note'],
+  // ═══════════════════════════════════════════════════════════
+  // DONUT CHART: Lead Status Composition
+  // ═══════════════════════════════════════════════════════════
+
+  // For demo: static composition data based on role
+  const leadCompositionData = useMemo(() => ({
+    labels: ['New Leads', 'Converted', 'Rejected/Archived'],
     datasets: [{
-      data: [
-        filteredActivities.filter(a => a.type === 'Call').length,
-        filteredActivities.filter(a => a.type === 'Email').length,
-        filteredActivities.filter(a => a.type === 'Meeting').length,
-        filteredActivities.filter(a => a.type === 'Note').length,
-      ],
-      backgroundColor: ['#10b981', '#3b82f6', '#8b5cf6', '#64748b'],
-      borderWidth: 0,
+      data: isManager ? [45, 120, 25] : [15, 42, 8],
+      backgroundColor: ['#6366f1', '#10b981', '#ef4444'],
+      borderWidth: 2,
+      borderColor: darkMode ? '#1e293b' : '#ffffff',
     }],
+  }), [isManager, darkMode]);
+
+  const donutOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'right' as const,
+        labels: {
+          boxWidth: 12,
+          font: { family: 'Plus Jakarta Sans', size: 11, weight: '700' as const },
+          color: textColor,
+        },
+      },
+    },
+    cutout: '72%',
   };
 
-  const recentActivities = filteredActivities.slice(0, 5).map(a => ({
-    ...a,
-    timeAgo: timeAgo(a.created_at),
-  }));
+  // ═══════════════════════════════════════════════════════════
+  // UPCOMING TIMELINE ACTIVITIES
+  // ═══════════════════════════════════════════════════════════
+
+  const upcomingActivities = useMemo(() => {
+    const baseline = new Date('2026-06-10T00:00:00');
+    let acts = [...allActivities];
+
+    // Filter by rep if manager has selected one
+    if (isManager && timelineRepFilter !== 'ALL') {
+      acts = acts.filter(a => a.owner_id === timelineRepFilter);
+    } else if (!isManager && currentUser) {
+      acts = acts.filter(a => a.owner_id === currentUser.id);
+    }
+
+    // Future activities only
+    acts = acts.filter(a => new Date(a.date) >= baseline);
+    acts.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    return acts;
+  }, [allActivities, isManager, timelineRepFilter, currentUser]);
+
+  // ═══════════════════════════════════════════════════════════
+  // RECENTLY UPDATED DEALS FEED
+  // ═══════════════════════════════════════════════════════════
+
+  const recentDeals = useMemo(() => {
+    return [...filteredLeads]
+      .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+      .slice(0, 4);
+  }, [filteredLeads]);
+
+  // ═══════════════════════════════════════════════════════════
+  // RENDER
+  // ═══════════════════════════════════════════════════════════
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 animate-fade-in">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-text-primary dark:text-white">Dashboard</h1>
+          <h1 className="text-2xl font-bold text-text-primary dark:text-primary">Dashboard</h1>
           <p className="text-text-secondary dark:text-text-muted">
-            {currentUser?.role === 'manager'
-              ? 'Welcome back! Here\'s your team\'s sales overview.'
-              : 'Welcome back! Here\'s your sales overview.'}
+            {isManager
+              ? "Welcome back! Here's your team's sales overview."
+              : "Welcome back! Here's your sales overview."}
           </p>
         </div>
-        <div className="flex gap-3">
-          {filteredLeads.length === 0 && (
-            <button
-              onClick={() => loadSampleData(addLead, addActivity, addScheduledTodo, showToast, setLoadingSample)}
-              disabled={loadingSample}
-              className="px-4 py-2 bg-accent text-white rounded-lg hover:bg-indigo-600 transition-colors flex items-center gap-2 disabled:opacity-50"
-            >
-              {loadingSample ? (
-                <><i className="fa-solid fa-spinner fa-spin"></i> Loading...</>
-              ) : (
-                <><i className="fa-solid fa-database"></i> Load Sample Data</>
-              )}
-            </button>
-          )}
-          <button
-            onClick={() => setShowQuickLogModal(true)}
-            className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors flex items-center gap-2"
-          >
-            <i className="fa-solid fa-plus"></i>
-            Quick Log
-          </button>
+        <button
+          onClick={() => setShowQuickLogModal(true)}
+          className="px-4 py-2 bg-green-500 text-primary rounded-lg hover:bg-green-600 transition-colors flex items-center gap-2 w-fit"
+        >
+          <i className="fa-solid fa-plus"></i>
+          Quick Log
+        </button>
+      </div>
+
+      {/* Date Range Filter Bar */}
+      <div className="bg-bg-card dark:bg-bg-card rounded-xl p-4 border border-border dark:border-border shadow-sm">
+        <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
+          <div className="flex flex-wrap items-center gap-4 w-full md:w-auto">
+            {/* Period Preset */}
+            <div className="w-full sm:w-48">
+              <label className="block text-[11px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                Cohort Period Filter
+              </label>
+              <select
+                value={periodPreset}
+                onChange={e => handlePresetChange(e.target.value as PeriodPreset)}
+                className="w-full px-3 py-2 rounded-lg border border-border bg-bg-page text-sm font-bold text-text-primary focus:outline-none focus:ring-2 focus:ring-accent cursor-pointer"
+              >
+                <option value="QUARTER">Current Quarter (Q2 2026)</option>
+                <option value="MONTH">Current Month</option>
+                <option value="YEAR">Fiscal Year (YTD)</option>
+              </select>
+            </div>
+            {/* Date Range */}
+            <div className="flex items-end gap-2">
+              <div>
+                <label className="block text-[11px] font-bold text-text-muted uppercase tracking-wider mb-1">Start Date</label>
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={e => setStartDate(e.target.value)}
+                  className="px-3 py-2 rounded-lg border border-border bg-bg-page text-sm font-semibold text-text-primary focus:outline-none focus:ring-2 focus:ring-accent cursor-pointer"
+                />
+              </div>
+              <span className="pb-2 text-text-muted font-bold">—</span>
+              <div>
+                <label className="block text-[11px] font-bold text-text-muted uppercase tracking-wider mb-1">End Date</label>
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={e => setEndDate(e.target.value)}
+                  className="px-3 py-2 rounded-lg border border-border bg-bg-page text-sm font-semibold text-text-primary focus:outline-none focus:ring-2 focus:ring-accent cursor-pointer"
+                />
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+      {/* KPI Cards - 6 metrics */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
         <MetricCard
-          label="Total Pipeline"
-          value={formatCurrency(totalPipeline)}
-          icon="fa-chart-line"
+          label="My Open Deals"
+          value={netOpenCount}
+          subtext="ACTIVE IN PIPELINES"
+          icon="fa-folder-open"
           color="#6366f1"
         />
         <MetricCard
-          label="Weighted Forecast"
-          value={formatCurrency(weightedForecast)}
-          icon="fa-scale-balanced"
-          color="#10b981"
-        />
-        <MetricCard
-          label="Win Rate"
-          value={`${winRate}%`}
-          icon="fa-trophy"
-          color="#f59e0b"
-        />
-        <MetricCard
-          label="Active Deals"
-          value={activeDeals}
-          icon="fa-bolt"
+          label="Total Pipeline Value"
+          value={formatCurrency(grossPipelineValue)}
+          subtext="UNWEIGHTED SUM"
+          icon="fa-chart-line"
           color="#3b82f6"
         />
         <MetricCard
-          label="Pending To-Dos"
-          value={pendingTodos}
-          icon="fa-calendar-check"
+          label="Forecasted Revenue"
+          value={formatCurrency(Math.round(weightedForecastRevenue))}
+          subtext="WEIGHTED BY PROBABILITY"
+          icon="fa-scale-balanced"
           color="#8b5cf6"
+        />
+        <MetricCard
+          label="Won Revenue"
+          value={formatCurrency(totalWonRevenue)}
+          subtext="CLOSED WON DEALS"
+          icon="fa-trophy"
+          color="#10b981"
+        />
+        <MetricCard
+          label="Lost Revenue"
+          value={formatCurrency(totalLostRevenue)}
+          subtext="CLOSED LOST DEALS"
+          icon="fa-xmark"
+          color="#ef4444"
+        />
+        <MetricCard
+          label="Win Outcome Rate"
+          value={`${absoluteWinRate}%`}
+          subtext="BASED ON VALUE"
+          icon="fa-percent"
+          color="#f59e0b"
         />
       </div>
 
       {/* Charts Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Bar Chart */}
-        <div className="lg:col-span-2 bg-bg-card dark:bg-bg-card rounded-xl p-6 shadow-sm border border-border dark:border-border">
-          <h3 className="text-lg font-semibold text-text-primary dark:text-white mb-4">Pipeline by Stage</h3>
-          <div className="h-[280px]">
-            <Bar data={chartData} options={chartOptions} />
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* Donut: Lead Status Composition */}
+        <div className="lg:col-span-4 bg-bg-card dark:bg-bg-card rounded-xl p-5 border border-border dark:border-border shadow-sm flex flex-col h-[320px]">
+          <div className="flex items-center gap-2 text-text-primary dark:text-primary mb-3 flex-shrink-0">
+            <i className="fa-solid fa-chart-pie text-accent"></i>
+            <h3 className="font-bold text-sm tracking-tight uppercase">Lead Status Composition</h3>
+          </div>
+          <div className="flex-1 relative flex items-center justify-center min-h-0">
+            <Doughnut data={leadCompositionData} options={donutOptions} />
           </div>
         </div>
 
-        {/* Won/Lost Panel */}
-        <div className="space-y-4">
-          <div className="bg-green-50 dark:bg-green-900/20 rounded-xl p-5 border border-green-200 dark:border-green-800">
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-10 h-10 rounded-lg bg-green-500/20 flex items-center justify-center">
-                <i className="fa-solid fa-check text-green-500"></i>
-              </div>
-              <div>
-                <p className="text-sm text-green-700 dark:text-green-400 font-medium">Closed Won</p>
-                <p className="text-2xl font-bold text-green-600 dark:text-green-400">{formatCurrency(wonLeads.reduce((s, l) => s + Number(l.deal_size), 0))}</p>
-              </div>
-            </div>
-            <p className="text-sm text-green-600 dark:text-green-400">{wonLeads.length} deals won</p>
+        {/* Mixed Bar/Line: Pipeline Stage Distribution */}
+        <div className="lg:col-span-8 bg-bg-card dark:bg-bg-card rounded-xl p-5 border border-border dark:border-border shadow-sm flex flex-col h-[320px]">
+          <div className="flex items-center gap-2 text-text-primary dark:text-primary mb-3 flex-shrink-0">
+            <i className="fa-solid fa-chart-line text-accent"></i>
+            <h3 className="font-bold text-sm uppercase tracking-wider">Deal Pipeline Stage Distribution</h3>
           </div>
-
-          <div className="bg-red-50 dark:bg-red-900/20 rounded-xl p-5 border border-red-200 dark:border-red-800">
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-10 h-10 rounded-lg bg-red-500/20 flex items-center justify-center">
-                <i className="fa-solid fa-xmark text-red-500"></i>
-              </div>
-              <div>
-                <p className="text-sm text-red-700 dark:text-red-400 font-medium">Closed Lost</p>
-                <p className="text-2xl font-bold text-red-600 dark:text-red-400">{formatCurrency(lostLeads.reduce((s, l) => s + Number(l.deal_size), 0))}</p>
-              </div>
-            </div>
-            <p className="text-sm text-red-600 dark:text-red-400">{lostLeads.length} deals lost</p>
+          <div className="flex-1 relative min-h-0 px-2">
+            {/* @ts-expect-error Chart.js mixed chart typing */}
+            <Bar data={mixedChartData} options={mixedChartOptions} />
           </div>
-
-          {/* Doughnut Chart */}
-          {filteredActivities.length > 0 && (
-            <div className="bg-bg-card dark:bg-bg-card rounded-xl p-5 border border-border dark:border-border">
-              <h3 className="text-sm font-semibold text-text-primary dark:text-white mb-3">Activity Breakdown</h3>
-              <div className="h-[140px]">
-                <Doughnut
-                  data={activityBreakdown}
-                  options={{
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: { legend: { position: 'right' as const, labels: { boxWidth: 12, padding: 8, font: { size: 11 } } } },
-                    cutout: '60%',
-                  }}
-                />
-              </div>
-            </div>
-          )}
         </div>
       </div>
 
-      {/* Recent Activities */}
-      <div className="bg-bg-card dark:bg-bg-card rounded-xl shadow-sm border border-border dark:border-border">
-        <div className="px-6 py-4 border-b border-border dark:border-border">
-          <h3 className="text-lg font-semibold text-text-primary dark:text-white">Recent Activities</h3>
-        </div>
-        {recentActivities.length === 0 ? (
-          <div className="p-8 text-center">
-            <i className="fa-solid fa-clock-rotate-left text-4xl text-text-muted mb-3"></i>
-            <p className="text-text-secondary dark:text-text-muted">No activities yet</p>
-          </div>
-        ) : (
-          <div className="divide-y divide-border dark:divide-border">
-            {recentActivities.map((activity) => (
-              <button
-                key={activity.id}
-                onClick={() => setSelectedActivity(activity as Activity)}
-                className="w-full px-6 py-4 flex items-center gap-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors text-left"
+      {/* Bottom Row: Timeline + Deals Feed */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* Upcoming Timeline Activities */}
+        <div className="lg:col-span-5 bg-bg-card dark:bg-bg-card rounded-xl border border-border dark:border-border shadow-sm overflow-hidden flex flex-col h-[540px]">
+          <div className="px-4 py-3 bg-gray-50 dark:bg-gray-900/50 border-b border-border dark:border-border flex items-center justify-between">
+            <div className="flex items-center gap-2 text-text-primary dark:text-primary">
+              <i className="fa-regular fa-clock text-accent font-bold"></i>
+              <h4 className="font-bold text-sm tracking-tight">Upcoming Timeline Activities</h4>
+            </div>
+            {isManager && (
+              <select
+                value={timelineRepFilter}
+                onChange={e => setTimelineRepFilter(e.target.value)}
+                className="border border-border dark:border-border bg-bg-card dark:bg-bg-card rounded-lg px-2 py-1 text-[11px] font-bold text-text-primary dark:text-primary outline-none"
               >
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${
-                  activity.type === 'Call' ? 'bg-green-100 dark:bg-green-900/30 text-green-600' :
-                  activity.type === 'Email' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600' :
-                  activity.type === 'Meeting' ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-600' :
-                  'bg-gray-100 dark:bg-gray-800 text-gray-600'
-                }`}>
-                  <i className={`fa-solid ${
-                    activity.type === 'Call' ? 'fa-phone' :
-                    activity.type === 'Email' ? 'fa-envelope' :
-                    activity.type === 'Meeting' ? 'fa-users' :
-                    'fa-note-sticky'
-                  }`}></i>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="font-medium text-text-primary dark:text-white">{activity.lead_name}</span>
-                    <Badge variant="stage" color={STAGE_COLORS[activity.stage as keyof typeof STAGE_COLORS] || '#64748b'}>
-                      {activity.stage}
-                    </Badge>
-                  </div>
-                  <p className="text-sm text-text-secondary dark:text-text-muted truncate">{activity.notes || 'No notes'}</p>
-                </div>
-                <span className="text-xs text-text-muted flex-shrink-0">{activity.timeAgo}</span>
-              </button>
-            ))}
+                <option value="ALL">All Team Members</option>
+                <option value="1">Duy Tran</option>
+                <option value="2">Mai Le</option>
+                <option value="3">Hung Vo</option>
+              </select>
+            )}
           </div>
-        )}
+          <div className="p-4 overflow-y-auto space-y-3 flex-1 bg-bg-card dark:bg-bg-card px-6">
+            {upcomingActivities.length === 0 ? (
+              <div className="p-8 text-center text-xs font-semibold text-text-muted italic">
+                No future activities logged matching target criteria filter parameters.
+              </div>
+            ) : (
+              upcomingActivities.map(act => {
+                const theme = ACTIVITY_THEME[act.type] ||ACTIVITY_THEME['Note'];
+                return (
+                  <button
+                    key={act.id}
+                    onClick={() => setCurrentPage('activities')}
+                    className="w-full text-left p-4 border border-border dark:border-border/80 rounded-xl hover:border-accent/40 hover:shadow-sm bg-gray-50/30 dark:bg-gray-900/30 transition space-y-2 cursor-pointer group relative"
+                  >
+                    <div className="flex justify-between items-center">
+                      <span className={`px-2.5 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider ${theme.bg} ${theme.border} ${theme.text}`}>
+                        {act.type}
+                      </span>
+                      <span className="text-[11px] text-text-muted font-bold tracking-tight">
+                        <i className="fa-regular fa-calendar-days mr-1"></i>
+                        {formatFullDate(act.date)}
+                      </span>
+                    </div>
+                    <h5 className="text-xs font-bold text-text-primary dark:text-primary group-hover:text-accent transition tracking-tight">
+                      {act.notes}
+                    </h5>
+                    <div className="pt-1.5 border-t border-border dark:border-border/50 flex items-center justify-between text-[11px] text-text-muted font-semibold">
+                      <span>Rep: {act.lead_name || '—'}</span>
+                      <span className="text-text-secondary font-bold">
+                        <i className="fa-regular fa-building mr-1"></i>
+                        {act.company || '—'}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {/* Recently Updated Deals Feed */}
+        <div className="lg:col-span-7 bg-bg-card dark:bg-bg-card rounded-xl border border-border dark:border-border shadow-sm overflow-hidden flex flex-col h-[540px]">
+          <div className="px-4 py-3 bg-gray-50 dark:bg-gray-900/50 border-b border-border dark:border-border flex items-center justify-between">
+            <div className="flex items-center gap-2 text-text-primary dark:text-primary">
+              <i className="fa-solid fa-rectangle-list text-accent"></i>
+              <h4 className="font-bold text-sm tracking-tight">Recently Updated Deals Feed</h4>
+            </div>
+            <button
+              onClick={() => setCurrentPage('deals')}
+              className="text-accent hover:text-indigo-600 text-xs font-bold transition flex items-center gap-1"
+            >
+              <span>View All Deals</span>
+              <i className="fa-solid fa-arrow-right text-[10px]"></i>
+            </button>
+          </div>
+          <div className="p-4 overflow-y-auto space-y-3 flex-1 bg-bg-card dark:bg-bg-card px-6">
+            {recentDeals.length === 0 ? (
+              <div className="p-8 text-center text-xs font-semibold text-text-muted italic">
+                No deals recorded during this specified window timeframe filter.
+              </div>
+            ) : (
+              recentDeals.map(deal => {
+                const badgeClass = STAGE_BADGE_CLASSES[deal.stage] || STAGE_BADGE_CLASSES['Prospecting'];
+                return (
+                  <div
+                    key={deal.id}
+                    className="p-4 border border-border dark:border-border/80 bg-bg-card dark:bg-bg-card rounded-xl shadow-sm flex items-center justify-between hover:border-accent/40 transition"
+                  >
+                    <div className="space-y-1 min-w-0 pr-3 flex-1">
+                      <h4 className="font-bold text-text-primary dark:text-primary text-sm tracking-tight truncate">
+                        {deal.name}
+                      </h4>
+                      <p className="text-[11px] text-text-muted font-semibold tracking-tight">
+                        Owner: {deal.company || '—'} &bull; Updated: {formatShortDate(deal.updated_at)}
+                      </p>
+                    </div>
+                    <div className="text-right flex-shrink-0 space-y-1">
+                      <span className="font-extrabold text-text-primary dark:text-primary text-sm block">
+                        {formatCurrency(Number(deal.deal_size))}
+                      </span>
+                      <div className="flex items-center gap-1.5 text-[10px] font-bold text-text-muted justify-end">
+                        <span>Prob: {deal.probability}%</span>
+                        <span className={`badge ${badgeClass} px-2 py-0.5 rounded text-[10px] font-semibold`}>
+                          { deal.stage}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Quick Log Modal */}
