@@ -1,8 +1,8 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Drawer } from '../shared/Drawer';
 import { Modal } from '../shared/Modal';
-import { STAGES, STAGE_COLORS, SOURCES, ACTIVITY_TYPES, type Lead, type Stage, type Source, type ActivityType } from '../../types';
+import { STAGES, STAGE_COLORS, SOURCES, ACTIVITY_TYPES, ACCOUNTS, type Lead, type Stage, type Source, type ActivityType, type Account } from '../../types';
 
 // ══════════════════════════════════════════════════════════════
 // HELPERS
@@ -63,7 +63,6 @@ function stagePillClass(s: string): string {
   return map[s] || 'bg-gray-100 text-gray-600';
 }
 
-
 const DEFAULT_PROB: Record<string, number> = {
   'Prospecting': 10,
   'Qualification': 25,
@@ -88,6 +87,18 @@ const ACTIVITY_BGS: Record<string, string> = {
 };
 
 // ══════════════════════════════════════════════════════════════
+// CUSTOMER TYPE
+// ══════════════════════════════════════════════════════════════
+
+interface Customer {
+  name: string;
+  company: string;
+  email: string;
+  phone: string;
+  wonCount: number;
+}
+
+// ══════════════════════════════════════════════════════════════
 // COMPONENT
 // ══════════════════════════════════════════════════════════════
 
@@ -95,12 +106,13 @@ type ViewMode = 'table' | 'kanban';
 type DetailTab = 'overview' | 'edit' | 'log';
 
 export function DealManagement() {
-  const { leads, updateLead, deleteLead, activities, currentUser, showToast, addActivity, setSelectedLead, addLead } = useApp();
+  const { leads, updateLead, deleteLead, activities, currentUser, showToast, addActivity, setSelectedLead, addLead, selectedMemberId } = useApp();
 
   // View state
   const [viewMode, setViewMode] = useState<ViewMode>('kanban');
   const [searchQuery, setSearchQuery] = useState('');
   const [stageFilter, setStageFilter] = useState('');
+  const [salespersonFilter, setSalespersonFilter] = useState('');
   const [sortMode, setSortMode] = useState('default');
 
   // Drawer state
@@ -111,18 +123,20 @@ export function DealManagement() {
   // Add modal state
   const [showAddModal, setShowAddModal] = useState(false);
   const [addFormData, setAddFormData] = useState({
-    name: '',
-    company: '',
-    email: '',
-    phone: '',
+    customer: null as Customer | null,
+    deal_name: '',
     deal_size: '',
     stage: 'Prospecting' as Stage,
-    probability: 10,
-    close_date: '',
     source: '' as Source,
-    last_activity: 'Call' as ActivityType,
-    notes: '',
+    assigned_to: '',
   });
+  const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+  const [customerSearch, setCustomerSearch] = useState('');
+  const customerInputRef = useRef<HTMLInputElement>(null);
+
+  // Edit modal state
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editFormData, setEditFormData] = useState<Lead | null>(null);
 
   // Drag state
   const [draggedDeal, setDraggedDeal] = useState<Lead | null>(null);
@@ -136,10 +150,83 @@ export function DealManagement() {
   // COMPUTED DATA
   // ═══════════════════════════════════════════════════════════
 
-  const activeDeals = useMemo(() => {
-    return leads.filter(l => !['Closed Won', 'Closed Lost'].includes(l.stage));
+  // Team: manager sees all, member sees only self
+  const assignableTeam = useMemo(() => {
+    if (currentUser?.role === 'manager') {
+      return ACCOUNTS;
+    }
+    return currentUser ? [currentUser] : [];
+  }, [currentUser]);
+
+  // Salespeople for filter (manager only)
+  const salespeople = useMemo(() => {
+    return ACCOUNTS.map(a => a.name);
+  }, []);
+
+  // Customer list from leads (unique by name + company)
+  const customers = useMemo(() => {
+    const map: Record<string, Customer> = {};
+    leads.forEach(l => {
+      const key = (l.name || '') + '|' + (l.company || '');
+      if (!map[key]) {
+        map[key] = {
+          name: l.name || '',
+          company: l.company || '',
+          email: l.email || '',
+          phone: l.phone || '',
+          wonCount: 0,
+        };
+      }
+    });
+    // Count won deals per customer
+    Object.values(map).forEach(c => {
+      c.wonCount = leads.filter(l => l.name === c.name && l.company === c.company && l.stage === 'Closed Won').length;
+    });
+    return Object.values(map).sort((a, b) => b.wonCount - a.wonCount || a.name.localeCompare(b.name));
   }, [leads]);
 
+  // Filtered customers for dropdown
+  const filteredCustomers = useMemo(() => {
+    if (!customerSearch) return customers;
+    const q = customerSearch.toLowerCase();
+    return customers.filter(c => c.name.toLowerCase().includes(q) || c.company.toLowerCase().includes(q));
+  }, [customers, customerSearch]);
+
+  // Get latest activity type for a lead
+  const getLatestActivityType = useCallback((leadId: string): string => {
+    const leadActs = activities
+      .filter(a => a.lead_id === leadId)
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    return leadActs.length ? leadActs[0].type : '';
+  }, [activities]);
+
+  // Filtered leads based on role and manager's selected member filter
+  const visibleLeads = useMemo(() => {
+    if (!currentUser) return [];
+
+    if (currentUser.role === 'member') {
+      // Member sees only their own leads
+      return leads.filter(l => l.owner_id === currentUser.id);
+    }
+
+    // Manager: check selectedMemberId from context
+    if (selectedMemberId === null) {
+      return leads;
+    }
+    return leads.filter(l => l.owner_id === selectedMemberId);
+  }, [leads, currentUser, selectedMemberId]);
+
+  // Active deals (not won/lost)
+  const activeDeals = useMemo(() => {
+    return visibleLeads.filter(l => !['Closed Won', 'Closed Lost'].includes(l.stage));
+  }, [visibleLeads]);
+
+  // All deals for Kanban (including closed)
+  const allDealsForKanban = useMemo(() => {
+    return visibleLeads;
+  }, [visibleLeads]);
+
+  // Filtered deals
   const filteredDeals = useMemo(() => {
     let result = [...activeDeals];
 
@@ -156,6 +243,14 @@ export function DealManagement() {
     // Stage filter
     if (stageFilter) {
       result = result.filter(l => l.stage === stageFilter);
+    }
+
+    // Salesperson filter (manager only)
+    if (salespersonFilter && currentUser?.role === 'manager') {
+      const account = ACCOUNTS.find(a => a.name === salespersonFilter);
+      if (account) {
+        result = result.filter(l => l.owner_id === account.id);
+      }
     }
 
     // Sort
@@ -185,25 +280,26 @@ export function DealManagement() {
     }
 
     return result;
-  }, [activeDeals, searchQuery, stageFilter, sortMode]);
+  }, [activeDeals, searchQuery, stageFilter, salespersonFilter, sortMode, currentUser]);
 
   // Summary metrics
   const totalDeals = activeDeals.length;
   const totalRevenue = activeDeals.reduce((s, l) => s + l.deal_size, 0);
   const totalEV = activeDeals.reduce((s, l) => s + Math.round(l.deal_size * l.probability / 100), 0);
-  const wonDeals = leads.filter(l => l.stage === 'Closed Won');
-  const lostDeals = leads.filter(l => l.stage === 'Closed Lost');
+  const wonDeals = visibleLeads.filter(l => l.stage === 'Closed Won');
+  const lostDeals = visibleLeads.filter(l => l.stage === 'Closed Lost');
   const closedDeals = wonDeals.length + lostDeals.length;
   const winRate = closedDeals > 0 ? Math.round((wonDeals.length / closedDeals) * 100) : 0;
 
+  // Deals by stage for Kanban
   const dealsByStage = useMemo(() => {
     const map: Record<string, Lead[]> = {};
     STAGES.forEach(s => map[s] = []);
-    filteredDeals.forEach(d => {
+    allDealsForKanban.forEach(d => {
       if (map[d.stage]) map[d.stage].push(d);
     });
     return map;
-  }, [filteredDeals]);
+  }, [allDealsForKanban]);
 
   const dealActivities = useMemo(() => {
     if (!selectedDeal) return [];
@@ -231,7 +327,7 @@ export function DealManagement() {
   const handleQuickStage = useCallback(async (dealId: string, direction: -1 | 1) => {
     const deal = leads.find(l => l.id === dealId);
     if (!deal) return;
-    const currentIdx = STAGES.indexOf(deal.stage as any);
+    const currentIdx = STAGES.indexOf(deal.stage as Stage);
     const newIdx = currentIdx + direction;
     if (newIdx < 0 || newIdx >= STAGES.length) return;
     const newStage = STAGES[newIdx];
@@ -271,50 +367,81 @@ export function DealManagement() {
     setDragOverStage(null);
   }, [draggedDeal, updateLead, showToast]);
 
+  // Customer selection
+  const handleSelectCustomer = useCallback((customer: Customer) => {
+    setAddFormData(prev => ({
+      ...prev,
+      customer,
+      deal_name: prev.deal_name || `${customer.company} - Enterprise Package`,
+    }));
+    setShowCustomerDropdown(false);
+    setCustomerSearch('');
+  }, []);
+
   // Add deal
   const handleAddDeal = useCallback(async () => {
-    if (!addFormData.name.trim()) {
-      showToast('error', 'Please enter a deal name');
+    if (!addFormData.customer) {
+      showToast('error', 'Please select a customer');
       return;
     }
+    if (!addFormData.deal_size || parseFloat(addFormData.deal_size) <= 0) {
+      showToast('error', 'Please enter a valid revenue value');
+      return;
+    }
+
+    const customer = addFormData.customer;
+    const assignedTo = addFormData.assigned_to || currentUser?.id || '0';
+
     await addLead({
-      name: addFormData.name.trim(),
-      company: addFormData.company.trim() || null,
-      email: addFormData.email.trim() || null,
-      phone: addFormData.phone.trim() || null,
-      deal_size: parseFloat(addFormData.deal_size) || 0,
+      name: customer.name,
+      company: customer.company,
+      email: customer.email,
+      phone: customer.phone,
+      deal_size: parseFloat(addFormData.deal_size),
       source: addFormData.source || 'Other',
       stage: addFormData.stage,
-      probability: addFormData.probability,
-      notes: addFormData.notes.trim() || null,
-      owner_id: currentUser?.id || '0',
-      close_date: addFormData.close_date || null,
-      last_activity: addFormData.last_activity,
+      probability: DEFAULT_PROB[addFormData.stage] || 0,
+      notes: addFormData.deal_name || null,
+      owner_id: assignedTo,
+      close_date: null,
+      last_activity: 'Note',
     });
-    showToast('success', 'Deal created successfully');
+
+    const assignedAccount = ACCOUNTS.find(a => a.id === assignedTo);
+    showToast('success', `Deal created for ${customer.name}${currentUser?.role === 'manager' && assignedAccount ? ' · assigned to ' + assignedAccount.name : ''}`);
     setShowAddModal(false);
     setAddFormData({
-      name: '',
-      company: '',
-      email: '',
-      phone: '',
+      customer: null,
+      deal_name: '',
       deal_size: '',
       stage: 'Prospecting',
-      probability: 10,
-      close_date: '',
       source: '' as Source,
-      last_activity: 'Call',
-      notes: '',
+      assigned_to: '',
     });
   }, [addFormData, currentUser, showToast, addLead]);
 
-  // Update deal from drawer
-  const handleUpdateDeal = useCallback(async (updates: Partial<Lead>) => {
-    if (!selectedDeal) return;
-    await updateLead(selectedDeal.id, updates);
-    showToast('success', 'Deal updated');
-    setSelectedDeal(prev => prev ? { ...prev, ...updates } : null);
-  }, [selectedDeal, updateLead, showToast]);
+  // Update deal from edit modal
+  const handleUpdateDeal = useCallback(async () => {
+    if (!editFormData) return;
+    await updateLead(editFormData.id, {
+      name: editFormData.name,
+      company: editFormData.company,
+      deal_size: editFormData.deal_size,
+      probability: editFormData.probability,
+      stage: editFormData.stage,
+      source: editFormData.source,
+      owner_id: editFormData.owner_id,
+    });
+    showToast('success', 'Deal updated successfully');
+    setShowEditModal(false);
+    setEditFormData(null);
+  }, [editFormData, updateLead, showToast]);
+
+  // Open edit modal
+  const openEditModal = useCallback((deal: Lead) => {
+    setEditFormData(deal);
+    setShowEditModal(true);
+  }, []);
 
   // Log activity
   const handleLogActivity = useCallback(async () => {
@@ -339,13 +466,53 @@ export function DealManagement() {
   }, [selectedDeal, logType, logNote, addActivity, currentUser, showToast]);
 
   // Delete deal
-  const handleDeleteDeal = useCallback(async () => {
-    if (!selectedDeal) return;
-    if (!confirm(`Delete "${selectedDeal.name}"? This cannot be undone.`)) return;
-    await deleteLead(selectedDeal.id);
+  const handleDeleteDeal = useCallback(async (deal: Lead) => {
+    if (!confirm(`Delete "${deal.name}"? This cannot be undone.`)) return;
+    await deleteLead(deal.id);
     showToast('info', 'Deal deleted');
     closeDetailDrawer();
-  }, [selectedDeal, deleteLead, showToast, closeDetailDrawer]);
+    setShowEditModal(false);
+  }, [deleteLead, showToast, closeDetailDrawer]);
+
+  // Export CSV
+  const handleExportCSV = useCallback(() => {
+    if (!visibleLeads.length) {
+      showToast('warning', 'No deals to export');
+      return;
+    }
+    const headers = ['Deal/Contact', 'Company', 'Email', 'Phone', 'Stage', 'Revenue (USD)', 'Probability (%)', 'Expected Value (USD)', 'Source', 'Assigned To', 'Latest Activity', 'Created', 'Last Updated'];
+    const esc = (v: string | number | null | undefined) => {
+      const s = v === null || v === undefined ? '' : String(v);
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    const day = (d: string) => d ? new Date(d).toISOString().slice(0, 10) : '';
+    const rows = visibleLeads.map(d => {
+      const ev = Math.round((d.deal_size * d.probability) / 100);
+      const account = ACCOUNTS.find(a => a.id === d.owner_id);
+      return [d.name, d.company, d.email, d.phone, d.stage, d.deal_size || 0, d.probability || 0, ev, d.source, account?.name || '', getLatestActivityType(d.id) || '', day(d.created_at), day(d.updated_at)].map(esc).join(',');
+    });
+    const csv = '\ufeff' + headers.map(esc).join(',') + '\n' + rows.join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'salestrack_deals.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('success', `Exported ${visibleLeads.length} deals to CSV`);
+  }, [visibleLeads, getLatestActivityType, showToast]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.customer-picker-container')) {
+        setShowCustomerDropdown(false);
+      }
+    };
+    document.addEventListener('click', handleClick);
+    return () => document.removeEventListener('click', handleClick);
+  }, []);
 
   // ═══════════════════════════════════════════════════════════
   // RENDER
@@ -364,7 +531,7 @@ export function DealManagement() {
             </span>
           </h1>
           <p className="text-sm text-text-muted mt-1">
-            Track pipeline stages, manage deal values, and log activities in one place.
+            Track stages, adjust confidence multipliers, and manage deal parameters.
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -372,9 +539,9 @@ export function DealManagement() {
           <div className="flex bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
             <button
               onClick={() => setViewMode('kanban')}
-              className={`px-3 py-1.5 rounded-md text-sm font-semibold transition-all ${
+              className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${
                 viewMode === 'kanban'
-                  ? 'bg-accent text-white shadow-sm'
+                  ? 'bg-white dark:bg-gray-700 text-indigo-600 dark:text-indigo-400 shadow-sm'
                   : 'text-text-muted hover:text-text-primary'
               }`}
             >
@@ -382,9 +549,9 @@ export function DealManagement() {
             </button>
             <button
               onClick={() => setViewMode('table')}
-              className={`px-3 py-1.5 rounded-md text-sm font-semibold transition-all ${
+              className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${
                 viewMode === 'table'
-                  ? 'bg-accent text-white shadow-sm'
+                  ? 'bg-white dark:bg-gray-700 text-indigo-600 dark:text-indigo-400 shadow-sm'
                   : 'text-text-muted hover:text-text-primary'
               }`}
             >
@@ -392,8 +559,24 @@ export function DealManagement() {
             </button>
           </div>
           <button
-            onClick={() => setShowAddModal(true)}
-            className="px-4 py-2 bg-accent text-white rounded-lg font-semibold hover:bg-indigo-600 transition-all shadow-sm hover:shadow-md flex items-center gap-2"
+            onClick={handleExportCSV}
+            className="px-3 py-2 bg-white dark:bg-gray-800 border border-border rounded-lg font-semibold text-sm text-text-secondary hover:bg-gray-50 dark:hover:bg-gray-700 transition-all flex items-center gap-2"
+          >
+            <i className="fa-solid fa-file-csv"></i>Export CSV
+          </button>
+          <button
+            onClick={() => {
+              setAddFormData({
+                customer: null,
+                deal_name: '',
+                deal_size: '',
+                stage: 'Prospecting',
+                source: '' as Source,
+                assigned_to: currentUser?.id || '',
+              });
+              setShowAddModal(true);
+            }}
+            className="px-4 py-2 bg-accent text-white rounded-lg font-semibold text-sm hover:bg-indigo-600 transition-all shadow-sm hover:shadow-md flex items-center gap-2"
           >
             <i className="fa-solid fa-plus"></i>Add Deal
           </button>
@@ -401,59 +584,54 @@ export function DealManagement() {
       </div>
 
       {/* ═══ SUMMARY BAR ═══ */}
-      <div className="bg-gradient-to-r from-accent to-indigo-600 rounded-xl overflow-hidden shadow-lg">
-        <div className="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-white/20">
-          <div className="p-5 text-center">
-            <div className="text-xs font-semibold text-white/70 uppercase tracking-wider">Opportunities</div>
-            <div className="text-3xl font-extrabold text-white mt-1">{totalDeals}</div>
-            <div className="text-xs text-white/50 mt-1">active deals</div>
-          </div>
-          <div className="p-5 text-center">
-            <div className="text-xs font-semibold text-white/70 uppercase tracking-wider">Revenue</div>
-            <div className="text-3xl font-extrabold text-white mt-1">{fmtCompact(totalRevenue)}</div>
-            <div className="text-xs text-white/50 mt-1">total deal value</div>
-          </div>
-          <div className="p-5 text-center">
-            <div className="text-xs font-semibold text-white/70 uppercase tracking-wider">Expected Revenue</div>
-            <div className="text-3xl font-extrabold text-white mt-1">{fmtCompact(totalEV)}</div>
-            <div className="text-xs text-white/50 mt-1">expected value (EV)</div>
-          </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="bg-white dark:bg-gray-800 border border-border rounded-xl p-4 shadow-sm">
+          <div className="text-[10px] font-bold opacity-70 uppercase tracking-wider text-text-muted">Opportunities</div>
+          <div className="text-2xl font-extrabold text-text-primary dark:text-white">{totalDeals}</div>
+          <div className="text-[10px] text-text-muted mt-1">active pipeline deals</div>
+        </div>
+        <div className="bg-white dark:bg-gray-800 border border-border rounded-xl p-4 shadow-sm">
+          <div className="text-[10px] font-bold opacity-70 uppercase tracking-wider text-text-muted">Revenue Values</div>
+          <div className="text-2xl font-extrabold text-indigo-600">{fmtCompact(totalRevenue)}</div>
+          <div className="text-[10px] text-text-muted mt-1">unweighted deal total</div>
+        </div>
+        <div className="bg-white dark:bg-gray-800 border border-border rounded-xl p-4 shadow-sm">
+          <div className="text-[10px] font-bold opacity-70 uppercase tracking-wider text-text-muted">Expected Revenue (EV)</div>
+          <div className="text-2xl font-extrabold text-emerald-600">{fmtCompact(totalEV)}</div>
+          <div className="text-[10px] text-text-muted mt-1">weighted by probability</div>
         </div>
       </div>
 
       {/* ═══ FILTERS BAR ═══ */}
-      <div className="bg-bg-card dark:bg-bg-card border border-border rounded-xl p-4 flex flex-wrap items-center gap-3">
+      <div className="bg-bg-card dark:bg-bg-card border border-border rounded-xl p-3 flex flex-wrap items-center gap-3">
         <div className="relative flex-1 min-w-[200px]">
-          <i className="fa-solid fa-search absolute left-3 top-1/2 -translate-y-1/2 text-text-muted text-sm"></i>
+          <i className="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-text-muted text-xs"></i>
           <input
             type="text"
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
-            placeholder="Search deal or company..."
-            className="w-full pl-10 pr-4 py-2 rounded-lg border border-border bg-bg-page dark:bg-bg-page text-sm focus:outline-none focus:ring-2 focus:ring-accent"
+            placeholder="Search opportunity or company..."
+            className="w-full pl-9 pr-4 py-2 rounded-lg border border-border bg-bg-page dark:bg-bg-page text-xs focus:outline-none focus:ring-2 focus:ring-accent"
           />
         </div>
         <select
           value={stageFilter}
           onChange={e => setStageFilter(e.target.value)}
-          className="px-3 py-2 rounded-lg border border-border bg-bg-card text-sm"
+          className="px-3 py-2 rounded-lg border border-border bg-bg-card text-xs font-bold"
         >
           <option value="">All Stages</option>
           {STAGES.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
-        <select
-          value={sortMode}
-          onChange={e => setSortMode(e.target.value)}
-          className="px-3 py-2 rounded-lg border border-border bg-bg-card text-sm"
-        >
-          <option value="default">Default Sort</option>
-          <option value="value-desc">Value: High → Low</option>
-          <option value="ev-desc">EV: High → Low</option>
-          <option value="prob-desc">Confidence: High → Low</option>
-          <option value="close-asc">Target Close: Soonest</option>
-          <option value="recent">Last Updated</option>
-          <option value="stale">Stalest First</option>
-        </select>
+        {currentUser?.role === 'manager' && (
+          <select
+            value={salespersonFilter}
+            onChange={e => setSalespersonFilter(e.target.value)}
+            className="px-3 py-2 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-900/20 text-xs font-bold text-amber-600"
+          >
+            <option value="">All Salespeople</option>
+            {salespeople.map(sp => <option key={sp} value={sp}>👤 {sp}</option>)}
+          </select>
+        )}
         <div className="flex-1"></div>
         <span className="text-xs text-text-muted font-medium">
           {filteredDeals.length} deal{filteredDeals.length !== 1 ? 's' : ''}
@@ -470,26 +648,36 @@ export function DealManagement() {
               const totalEV = stageDeals.reduce((s, d) => s + Math.round(d.deal_size * d.probability / 100), 0);
               const sc = STAGE_COLORS[stage as keyof typeof STAGE_COLORS];
               const isDragOver = dragOverStage === stage;
+              const isClosedWon = stage === 'Closed Won';
+              const isClosedLost = stage === 'Closed Lost';
 
               return (
                 <div
                   key={stage}
-                  className="w-[270px] flex-shrink-0 flex flex-col"
+                  className="w-[280px] flex-shrink-0 flex flex-col"
                   onDragOver={e => handleDragOver(e, stage)}
                   onDragLeave={handleDragLeave}
                   onDrop={() => handleDrop(stage)}
                 >
                   {/* Column Header */}
                   <div
-                    className="px-4 py-3 rounded-t-xl border-b-4 bg-white dark:bg-gray-800"
+                    className={`px-3 py-2 rounded-t-xl border-b-4 ${
+                      isClosedWon ? 'bg-green-50 dark:bg-green-900/20' :
+                      isClosedLost ? 'bg-red-50 dark:bg-red-900/20' :
+                      'bg-white dark:bg-gray-800'
+                    }`}
                     style={{ borderColor: sc }}
                   >
-                    <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center justify-between mb-1">
                       <div className="flex items-center gap-2">
                         <div className="w-2 h-2 rounded-full" style={{ background: sc }}></div>
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-text-muted">{stage}</span>
+                        <span className="text-[10px] font-extrabold uppercase tracking-wider text-text-muted">{stage}</span>
                       </div>
-                      <span className="px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-[10px] font-bold text-text-muted">
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                        isClosedWon ? 'bg-green-100 dark:bg-green-800 text-green-600 dark:text-green-300' :
+                        isClosedLost ? 'bg-red-100 dark:bg-red-800 text-red-600 dark:text-red-300' :
+                        'bg-gray-100 dark:bg-gray-700 text-text-muted'
+                      }`}>
                         {stageDeals.length}
                       </span>
                     </div>
@@ -502,7 +690,9 @@ export function DealManagement() {
                     className={`flex-1 p-2 rounded-b-xl min-h-[200px] space-y-2 transition-colors ${
                       isDragOver
                         ? 'bg-indigo-50 dark:bg-indigo-900/20 border-2 border-dashed border-accent'
-                        : 'bg-gray-50 dark:bg-gray-900/30'
+                        : isClosedWon ? 'bg-green-50/50 dark:bg-green-900/10' :
+                        isClosedLost ? 'bg-red-50/50 dark:bg-red-900/10' :
+                        'bg-gray-50 dark:bg-gray-900/30'
                     }`}
                   >
                     {stageDeals.map(deal => (
@@ -510,25 +700,18 @@ export function DealManagement() {
                         key={deal.id}
                         deal={deal}
                         stageColor={sc}
+                        assignedTo={ACCOUNTS.find(a => a.id === deal.owner_id)?.name}
+                        latestActivity={getLatestActivityType(deal.id)}
                         onDragStart={() => handleDragStart(deal)}
                         onClick={() => openDetailDrawer(deal)}
                       />
                     ))}
-                    {stageDeals.length === 0 && !isDragOver && (
+                    {stageDeals.length === 0 && !isDragOver && !isClosedWon && !isClosedLost && (
                       <div className="flex flex-col items-center justify-center py-8 text-text-muted border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-lg">
                         <i className="fa-regular fa-folder-open text-lg mb-1"></i>
                         <span className="text-xs">Drop here</span>
                       </div>
                     )}
-                    <button
-                      onClick={() => {
-                        setAddFormData(prev => ({ ...prev, stage: stage as Stage }));
-                        setShowAddModal(true);
-                      }}
-                      className="w-full px-3 py-2 text-xs font-semibold text-text-muted hover:text-accent hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded-lg border border-dashed border-transparent hover:border-accent/30 transition-all flex items-center justify-center gap-1"
-                    >
-                      <i className="fa-solid fa-plus text-[10px]"></i>Add deal
-                    </button>
                   </div>
                 </div>
               );
@@ -541,7 +724,7 @@ export function DealManagement() {
       {viewMode === 'table' && (
         <div className="bg-bg-card dark:bg-bg-card border border-border rounded-xl overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[900px]">
+            <table className="w-full min-w-[1000px]">
               <thead className="bg-gray-50 dark:bg-gray-900/50 border-b border-border">
                 <tr>
                   <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-text-muted">Deal / Account</th>
@@ -551,9 +734,8 @@ export function DealManagement() {
                     Exp. Value (EV)
                     <i className="fa-regular fa-circle-question ml-1 text-gray-300 cursor-help" title="Expected Value = Revenue × Confidence"></i>
                   </th>
-                  <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-text-muted">Target Close</th>
-                  <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-text-muted">Last Activity</th>
-                  <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-text-muted">Last Contact</th>
+                  <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-text-muted">Activity</th>
+                  <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-text-muted">Last Updated</th>
                   <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-text-muted"></th>
                 </tr>
               </thead>
@@ -561,12 +743,11 @@ export function DealManagement() {
                 {filteredDeals.map(deal => {
                   const ev = Math.round(deal.deal_size * deal.probability / 100);
                   const sc = STAGE_COLORS[deal.stage as keyof typeof STAGE_COLORS];
-                  const stageIdx = STAGES.indexOf(deal.stage as any);
+                  const stageIdx = STAGES.indexOf(deal.stage as Stage);
                   const canFwd = deal.stage !== 'Closed Won' && deal.stage !== 'Closed Lost';
                   const canBwd = stageIdx > 0;
-                  const cds = closeDateStatus(deal.close_date || null);
-                  const days = Math.floor((Date.now() - new Date(deal.updated_at).getTime()) / 86400000);
-                  const lastAct = deal.last_activity || 'Note';
+                  const latestAct = getLatestActivityType(deal.id);
+                  const assignedAccount = ACCOUNTS.find(a => a.id === deal.owner_id);
 
                   return (
                     <tr
@@ -583,16 +764,21 @@ export function DealManagement() {
                             {deal.name.charAt(0).toUpperCase()}
                           </div>
                           <div>
-                            <div className="font-semibold text-text-primary dark:text-white text-sm">{deal.name}</div>
-                            <div className="text-[11px] text-text-muted flex items-center gap-1">
+                            <div className="font-bold text-text-primary dark:text-white text-sm">{deal.name}</div>
+                            <div className="text-[10px] text-text-muted flex items-center gap-1">
                               <i className="fa-regular fa-building text-[9px]"></i>{deal.company || '—'}
                             </div>
+                            {assignedAccount && (
+                              <div className="text-[10px] text-text-muted mt-0.5">
+                                <i className="fa-solid fa-user-tie text-[9px]"></i> {assignedAccount.name}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </td>
                       <td className="px-4 py-3 font-bold text-text-primary dark:text-white">{fmtCurrency(deal.deal_size)}</td>
                       <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1">
                           <button
                             onClick={() => handleQuickStage(deal.id, -1)}
                             disabled={!canBwd}
@@ -600,10 +786,10 @@ export function DealManagement() {
                               canBwd ? 'border-border hover:border-accent hover:text-accent text-text-muted' : 'border-transparent text-gray-300 cursor-not-allowed'
                             }`}
                           >
-                            <i className="fa-solid fa-chevron-left text-[10px]"></i>
+                            <i className="fa-solid fa-chevron-left text-[8px]"></i>
                           </button>
-                          <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${stagePillClass(deal.stage)}`}>
-                            <i className="fa-solid fa-circle text-[6px] mr-1"></i>{deal.stage}
+                          <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold whitespace-nowrap ${stagePillClass(deal.stage)}`}>
+                            {deal.stage}
                           </span>
                           <button
                             onClick={() => handleQuickStage(deal.id, 1)}
@@ -612,67 +798,49 @@ export function DealManagement() {
                               canFwd ? 'border-border hover:border-accent hover:text-accent text-text-muted' : 'border-transparent text-gray-300 cursor-not-allowed'
                             }`}
                           >
-                            <i className="fa-solid fa-chevron-right text-[10px]"></i>
+                            <i className="fa-solid fa-chevron-right text-[8px]"></i>
                           </button>
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        <div className="font-bold text-accent text-sm">{fmtCurrency(ev)}</div>
-                        <div className="text-[11px] text-text-muted">{deal.probability}% confidence</div>
+                        <div className="font-extrabold text-indigo-600 text-sm">{fmtCurrency(ev)}</div>
                       </td>
                       <td className="px-4 py-3">
-                        {deal.close_date ? (
-                          <span className={`text-xs font-medium ${
-                            cds === 'overdue' ? 'text-red-600 font-bold' :
-                            cds === 'soon' ? 'text-amber-600 font-bold' :
-                            'text-text-secondary'
+                        {latestAct ? (
+                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                            latestAct === 'Call' ? 'bg-green-100 dark:bg-green-900/30 text-green-600' :
+                            latestAct === 'Email' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600' :
+                            latestAct === 'Meeting' ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-600' :
+                            'bg-gray-100 dark:bg-gray-800 text-gray-600'
                           }`}>
-                            {cds === 'overdue' && <i className="fa-solid fa-circle-exclamation mr-1"></i>}
-                            {formatDate(deal.close_date)}
+                            <i className={`fa-solid ${ACTIVITY_ICONS[latestAct] || 'fa-circle'} text-[9px]`}></i>
+                            {latestAct}
                           </span>
                         ) : (
                           <span className="text-xs text-text-muted">—</span>
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                          lastAct === 'Call' ? 'bg-green-100 dark:bg-green-900/30 text-green-600' :
-                          lastAct === 'Email' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600' :
-                          lastAct === 'Meeting' ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-600' :
-                          'bg-gray-100 dark:bg-gray-800 text-gray-600'
-                        }`}>
-                          <i className={`fa-solid ${ACTIVITY_ICONS[lastAct] || 'fa-circle'} text-[9px]`}></i>
-                          {lastAct}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={`text-xs font-medium ${
-                          days === 0 ? 'text-green-600 font-bold' :
-                          days < 4 ? 'text-text-secondary' :
-                          days < 7 ? 'text-amber-600 font-bold' :
-                          'text-red-500 font-bold'
-                        }`}>
-                          {timeAgo(deal.updated_at)}
-                        </span>
+                        <span className="text-xs text-text-muted whitespace-nowrap">{timeAgo(deal.updated_at)}</span>
                       </td>
                       <td className="px-4 py-3 text-right" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1">
                           <button
                             onClick={() => openDetailDrawer(deal)}
-                            className="w-7 h-7 rounded flex items-center justify-center text-text-muted hover:text-accent hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-all"
+                            className="w-7 h-7 rounded flex items-center justify-center text-text-muted hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-all"
                             title="View"
                           >
                             <i className="fa-solid fa-eye text-xs"></i>
                           </button>
                           <button
-                            onClick={() => openDetailDrawer(deal, 'log')}
-                            className="w-7 h-7 rounded flex items-center justify-center text-text-muted hover:text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20 transition-all"
-                            title="Log Activity"
+                            onClick={() => openEditModal(deal)}
+                            className="w-7 h-7 rounded flex items-center justify-center text-text-muted hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-all"
+                            title="Edit"
                           >
-                            <i className="fa-solid fa-plus text-xs"></i>
+                            <i className="fa-solid fa-pen text-xs"></i>
                           </button>
                           <button
-                            onClick={() => { setSelectedDeal(deal); handleDeleteDeal(); }}
+                            onClick={() => handleDeleteDeal(deal)}
                             className="w-7 h-7 rounded flex items-center justify-center text-text-muted hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all"
                             title="Delete"
                           >
@@ -685,7 +853,7 @@ export function DealManagement() {
                 })}
                 {filteredDeals.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="px-4 py-12 text-center">
+                    <td colSpan={7} className="px-4 py-12 text-center">
                       <div className="text-text-muted">
                         <i className="fa-solid fa-folder-open text-3xl mb-3 block opacity-30"></i>
                         <p className="text-sm font-medium text-text-secondary">No deals found</p>
@@ -708,49 +876,22 @@ export function DealManagement() {
         footer={
           <div className="flex gap-2">
             <button
-              onClick={handleDeleteDeal}
+              onClick={() => selectedDeal && handleDeleteDeal(selectedDeal)}
               className="px-4 py-2 text-sm font-semibold text-red-600 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/40 transition-all"
             >
               <i className="fa-solid fa-trash-can mr-1.5"></i>Delete
             </button>
-            {detailTab === 'edit' && (
-              <button
-                onClick={() => {
-                  showToast('success', 'Changes saved');
-                  setDetailTab('overview');
-                }}
-                className="flex-1 px-4 py-2 bg-accent text-white font-semibold rounded-lg hover:bg-indigo-600 transition-all"
-              >
-                <i className="fa-solid fa-check mr-1.5"></i>Save Changes
-              </button>
-            )}
+            <button
+              onClick={() => selectedDeal && openEditModal(selectedDeal)}
+              className="flex-1 px-4 py-2 bg-accent text-white font-semibold rounded-lg hover:bg-indigo-600 transition-all"
+            >
+              <i className="fa-solid fa-pen mr-1.5"></i>Edit Deal
+            </button>
           </div>
         }
       >
         {selectedDeal && (
           <div className="space-y-6">
-            {/* Tab Bar */}
-            <div className="flex bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
-              {(['overview', 'edit', 'log'] as DetailTab[]).map(tab => (
-                <button
-                  key={tab}
-                  onClick={() => setDetailTab(tab)}
-                  className={`flex-1 px-3 py-2 rounded-md text-xs font-semibold transition-all ${
-                    detailTab === tab
-                      ? 'bg-white dark:bg-gray-700 text-accent shadow-sm'
-                      : 'text-text-muted hover:text-text-primary'
-                  }`}
-                >
-                  <i className={`fa-solid ${
-                    tab === 'overview' ? 'fa-circle-info' :
-                    tab === 'edit' ? 'fa-pen' :
-                    'fa-clock-rotate-left'
-                  } mr-1.5`}></i>
-                  {tab === 'overview' ? 'Overview' : tab === 'edit' ? 'Edit' : 'Activity Log'}
-                </button>
-              ))}
-            </div>
-
             {/* Header */}
             <div className="flex items-start gap-4">
               <div
@@ -769,395 +910,245 @@ export function DealManagement() {
               </div>
             </div>
 
-            {detailTab === 'overview' && (
-              <>
-                {/* KPIs */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg">
-                    <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Revenue</div>
-                    <div className="text-xl font-bold text-text-primary dark:text-white mt-1">{fmtCurrency(selectedDeal.deal_size)}</div>
-                  </div>
-                  <div className="p-3 bg-indigo-50 dark:bg-indigo-900/30 rounded-lg border border-indigo-200 dark:border-indigo-800">
-                    <div className="text-[10px] font-bold text-accent uppercase tracking-wider">Expected Value</div>
-                    <div className="text-xl font-bold text-accent mt-1">{fmtCurrency(Math.round(selectedDeal.deal_size * selectedDeal.probability / 100))}</div>
-                  </div>
-                </div>
+            {/* KPIs */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg">
+                <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider">Revenue</div>
+                <div className="text-xl font-bold text-text-primary dark:text-white mt-1">{fmtCurrency(selectedDeal.deal_size)}</div>
+              </div>
+              <div className="p-3 bg-indigo-50 dark:bg-indigo-900/30 rounded-lg border border-indigo-200 dark:border-indigo-800">
+                <div className="text-[10px] font-bold text-accent uppercase tracking-wider">Expected Value</div>
+                <div className="text-xl font-bold text-accent mt-1">{fmtCurrency(Math.round(selectedDeal.deal_size * selectedDeal.probability / 100))}</div>
+              </div>
+            </div>
 
-                {/* Details Grid */}
-                <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-y-4 text-sm">
-                    <div>
-                      <span className="text-[10px] font-bold text-text-muted uppercase">Target Close</span>
-                      <p className="font-semibold text-text-primary dark:text-white mt-1">{formatDate(selectedDeal.close_date)}</p>
-                    </div>
-                    <div>
-                      <span className="text-[10px] font-bold text-text-muted uppercase">Lead Source</span>
-                      <p className="font-semibold text-text-primary dark:text-white mt-1">{selectedDeal.source || '—'}</p>
-                    </div>
-                    <div>
-                      <span className="text-[10px] font-bold text-text-muted uppercase">Last Contact</span>
-                      <p className="font-semibold mt-1" style={{ color: probColor(100 - Math.min(Math.floor((Date.now() - new Date(selectedDeal.updated_at).getTime()) / 86400000) * 10, 100)) }}>
-                        {timeAgo(selectedDeal.updated_at)}
-                      </p>
-                    </div>
-                    <div>
-                      <span className="text-[10px] font-bold text-text-muted uppercase">Email</span>
-                      <p className="font-semibold text-accent mt-1">{selectedDeal.email || '—'}</p>
-                    </div>
-                  </div>
-
-                  {/* Confidence */}
-                  <div className="pt-4 border-t border-border">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-[10px] font-bold text-text-muted uppercase">Confidence</span>
-                      <span className="text-sm font-bold" style={{ color: probColor(selectedDeal.probability) }}>{selectedDeal.probability}%</span>
-                    </div>
-                    <div className="h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all"
-                        style={{ width: `${selectedDeal.probability}%`, background: probColor(selectedDeal.probability) }}
-                      ></div>
-                    </div>
-                  </div>
-
-                  {/* Quick Stage Mover */}
-                  <div>
-                    <div className="text-[10px] font-bold text-text-muted uppercase mb-2">Quick Move To</div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {STAGES.map(s => {
-                        const isCurrent = s === selectedDeal.stage;
-                        const idx = STAGES.indexOf(s as Stage);
-                        const curIdx = STAGES.indexOf(selectedDeal.stage as Stage);
-                        const isForward = idx === curIdx + 1;
-                        return (
-                          <button
-                            key={s}
-                            onClick={() => handleUpdateDeal({ stage: s as Stage, probability: DEFAULT_PROB[s as keyof typeof DEFAULT_PROB] })}
-                            disabled={isCurrent}
-                            className={`px-2.5 py-1 rounded-full text-[10px] font-bold border transition-all ${
-                              isCurrent
-                                ? 'bg-gray-100 dark:bg-gray-800 text-text-muted border-transparent cursor-default'
-                                : isForward
-                                ? 'bg-indigo-50 dark:bg-indigo-900/30 text-accent border-accent/30 hover:border-accent'
-                                : 'border-border hover:border-accent hover:text-accent'
-                            }`}
-                          >
-                            {isCurrent ? <i className="fa-solid fa-check mr-1"></i> : null}{s}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Notes */}
-                  {selectedDeal.notes && (
-                    <div className="p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg">
-                      <div className="text-[10px] font-bold text-text-muted uppercase mb-2">Notes</div>
-                      <p className="text-sm text-text-secondary whitespace-pre-wrap">{selectedDeal.notes}</p>
-                    </div>
-                  )}
-
-                  {/* Recent Activities */}
-                  <div>
-                    <div className="text-[10px] font-bold text-text-muted uppercase mb-3">Recent Activities</div>
-                    {dealActivities.length === 0 ? (
-                      <div className="text-center py-6 text-text-muted text-sm">
-                        No activities yet.{' '}
-                        <button onClick={() => setDetailTab('log')} className="text-accent font-semibold hover:underline">Log one now</button>
-                      </div>
-                    ) : (
-                      <div className="space-y-2">
-                        {dealActivities.slice(0, 3).map(act => (
-                          <div key={act.id} className="flex items-start gap-3 p-2 bg-gray-50 dark:bg-gray-900/50 rounded-lg">
-                            <div className={`w-7 h-7 rounded-full flex items-center justify-center ${ACTIVITY_BGS[act.type] || 'bg-gray-100'}`}>
-                              <i className={`fa-solid ${ACTIVITY_ICONS[act.type] || 'fa-circle'} text-xs`}></i>
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="text-xs font-semibold text-text-primary dark:text-white">{act.type}</div>
-                              <div className="text-[11px] text-text-muted line-clamp-2">{act.notes || '—'}</div>
-                              <div className="text-[10px] text-text-muted mt-0.5">{timeAgo(act.created_at)}</div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </>
-            )}
-
-            {detailTab === 'edit' && (
-              <div className="space-y-4">
+            {/* Details Grid */}
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-y-4 text-sm">
                 <div>
-                  <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">Deal Name *</label>
-                  <input
-                    type="text"
-                    value={selectedDeal.name}
-                    onChange={e => setSelectedDeal({ ...selectedDeal, name: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg border border-border bg-bg-page"
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">Revenue ($)</label>
-                    <input
-                      type="number"
-                      value={selectedDeal.deal_size}
-                      onChange={e => setSelectedDeal({ ...selectedDeal, deal_size: parseFloat(e.target.value) || 0 })}
-                      className="w-full px-3 py-2 rounded-lg border border-border bg-bg-page"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">Target Close</label>
-                    <input
-                      type="date"
-                      value={selectedDeal.close_date || ''}
-                      onChange={e => setSelectedDeal({ ...selectedDeal, close_date: e.target.value })}
-                      className="w-full px-3 py-2 rounded-lg border border-border bg-bg-page"
-                    />
-                  </div>
+                  <span className="text-[10px] font-bold text-text-muted uppercase">Lead Source</span>
+                  <p className="font-semibold text-text-primary dark:text-white mt-1">{selectedDeal.source || '—'}</p>
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">
-                    Confidence — <span className="text-accent">EV: {fmtCurrency(Math.round(selectedDeal.deal_size * selectedDeal.probability / 100))}</span>
-                  </label>
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="range"
-                      min="0"
-                      max="100"
-                      value={selectedDeal.probability}
-                      onChange={e => setSelectedDeal({ ...selectedDeal, probability: parseInt(e.target.value) })}
-                      className="flex-1"
-                    />
-                    <span className="text-sm font-bold w-12 text-right" style={{ color: probColor(selectedDeal.probability) }}>
-                      {selectedDeal.probability}%
-                    </span>
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">Lead Source</label>
-                    <select
-                      value={selectedDeal.source}
-                      onChange={e => setSelectedDeal({ ...selectedDeal, source: e.target.value })}
-                      className="w-full px-3 py-2 rounded-lg border border-border bg-bg-page"
-                    >
-                      <option value="">— Select —</option>
-                      {SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">Last Activity</label>
-                    <select
-                      value={selectedDeal.last_activity || 'Call'}
-                      onChange={e => setSelectedDeal({ ...selectedDeal, last_activity: e.target.value as ActivityType })}
-                      className="w-full px-3 py-2 rounded-lg border border-border bg-bg-page"
-                    >
-                      {ACTIVITY_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-                    </select>
-                  </div>
+                  <span className="text-[10px] font-bold text-text-muted uppercase">Assigned To</span>
+                  <p className="font-semibold text-text-primary dark:text-white mt-1">{ACCOUNTS.find(a => a.id === selectedDeal.owner_id)?.name || '—'}</p>
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">Notes</label>
-                  <textarea
-                    value={selectedDeal.notes || ''}
-                    onChange={e => setSelectedDeal({ ...selectedDeal, notes: e.target.value })}
-                    rows={3}
-                    className="w-full px-3 py-2 rounded-lg border border-border bg-bg-page resize-none"
-                  />
+                  <span className="text-[10px] font-bold text-text-muted uppercase">Email</span>
+                  <p className="font-semibold text-accent mt-1">{selectedDeal.email || '—'}</p>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold text-text-muted uppercase">Phone</span>
+                  <p className="font-semibold text-text-primary dark:text-white mt-1">{selectedDeal.phone || '—'}</p>
                 </div>
               </div>
-            )}
 
-            {detailTab === 'log' && (
-              <div className="space-y-4">
-                {/* Log new activity */}
-                <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-border">
-                  <div className="text-xs font-bold text-text-secondary mb-3">
-                    <i className="fa-solid fa-plus text-accent mr-1.5"></i>Log New Activity
-                  </div>
-                  <div className="flex flex-wrap gap-2 mb-3">
-                    {ACTIVITY_TYPES.map(t => (
-                      <button
-                        key={t}
-                        onClick={() => setLogType(t)}
-                        className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-all ${
-                          logType === t
-                            ? ACTIVITY_BGS[t] + ' border-current'
-                            : 'border-border text-text-muted hover:border-accent hover:text-accent'
-                        }`}
-                      >
-                        <i className={`fa-solid ${ACTIVITY_ICONS[t]} mr-1 text-[10px]`}></i>
-                        {t}
-                      </button>
+              {/* Confidence */}
+              <div className="pt-4 border-t border-border">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] font-bold text-text-muted uppercase">Confidence</span>
+                  <span className="text-sm font-bold" style={{ color: probColor(selectedDeal.probability) }}>{selectedDeal.probability}%</span>
+                </div>
+                <div className="h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full transition-all"
+                    style={{ width: `${selectedDeal.probability}%`, background: probColor(selectedDeal.probability) }}
+                  ></div>
+                </div>
+              </div>
+
+              {/* Notes */}
+              {selectedDeal.notes && (
+                <div className="p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg">
+                  <div className="text-[10px] font-bold text-text-muted uppercase mb-2">Notes</div>
+                  <p className="text-sm text-text-secondary whitespace-pre-wrap">{selectedDeal.notes}</p>
+                </div>
+              )}
+
+              {/* Recent Activities */}
+              <div>
+                <div className="text-[10px] font-bold text-text-muted uppercase mb-3">Recent Activities</div>
+                {dealActivities.length === 0 ? (
+                  <div className="text-center py-6 text-text-muted text-sm">No activities yet.</div>
+                ) : (
+                  <div className="space-y-2">
+                    {dealActivities.slice(0, 5).map(act => (
+                      <div key={act.id} className="flex items-start gap-3 p-2 bg-gray-50 dark:bg-gray-900/50 rounded-lg">
+                        <div className={`w-7 h-7 rounded-full flex items-center justify-center ${ACTIVITY_BGS[act.type] || 'bg-gray-100'}`}>
+                          <i className={`fa-solid ${ACTIVITY_ICONS[act.type] || 'fa-circle'} text-xs`}></i>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs font-semibold text-text-primary dark:text-white">{act.type}</div>
+                          <div className="text-[11px] text-text-muted line-clamp-2">{act.notes || '—'}</div>
+                          <div className="text-[10px] text-text-muted mt-0.5">{timeAgo(act.created_at)}</div>
+                        </div>
+                      </div>
                     ))}
                   </div>
-                  <textarea
-                    value={logNote}
-                    onChange={e => setLogNote(e.target.value)}
-                    placeholder="Add notes about this activity..."
-                    rows={3}
-                    className="w-full px-3 py-2 rounded-lg border border-border bg-white dark:bg-gray-800 text-sm resize-none mb-3"
-                  />
-                  <button
-                    onClick={handleLogActivity}
-                    className="w-full px-4 py-2 bg-accent text-white font-semibold rounded-lg hover:bg-indigo-600 transition-all"
-                  >
-                    <i className="fa-solid fa-check mr-1.5"></i>Save Activity
-                  </button>
-                </div>
-
-                {/* Activity History */}
-                <div>
-                  <div className="text-[10px] font-bold text-text-muted uppercase mb-3">Activity History</div>
-                  {dealActivities.length === 0 ? (
-                    <div className="text-center py-6 text-text-muted text-sm">No activities yet.</div>
-                  ) : (
-                    <div className="space-y-2">
-                      {dealActivities.map(act => (
-                        <div key={act.id} className="flex items-start gap-3 p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg">
-                          <div className={`w-8 h-8 rounded-full flex items-center justify-center ${ACTIVITY_BGS[act.type] || 'bg-gray-100'}`}>
-                            <i className={`fa-solid ${ACTIVITY_ICONS[act.type] || 'fa-circle'} text-sm`}></i>
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="text-xs font-bold text-text-primary dark:text-white">{act.type}</span>
-                              <span className="text-[10px] text-text-muted">{timeAgo(act.created_at)}</span>
-                            </div>
-                            <p className="text-sm text-text-secondary line-clamp-3">{act.notes || '—'}</p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                )}
               </div>
-            )}
+            </div>
           </div>
         )}
       </Drawer>
 
       {/* ═══ ADD DEAL MODAL ═══ */}
-      <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} title="Add Sales Opportunity" size="lg">
+      <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} title="Add Deal" size="lg">
         <div className="space-y-4">
+          {/* Customer Picker */}
+          <div className="customer-picker-container relative">
+            <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">
+              Customer <span className="text-text-muted font-normal">(from Lead Management)</span>
+            </label>
+            <div
+              onClick={() => setShowCustomerDropdown(!showCustomerDropdown)}
+              className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border cursor-pointer transition-all ${
+                showCustomerDropdown ? 'border-accent ring-2 ring-accent/20' : 'border-border hover:border-accent'
+              }`}
+            >
+              {addFormData.customer ? (
+                <>
+                  <div className="w-8 h-8 rounded-full bg-accent text-white flex items-center justify-center font-bold text-xs">
+                    {addFormData.customer.name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-text-primary text-sm">{addFormData.customer.name}</div>
+                    <div className="text-[11px] text-text-muted">{addFormData.customer.company}</div>
+                  </div>
+                  {addFormData.customer.wonCount > 0 && (
+                    <span className="text-[11px] font-bold text-red-500">({addFormData.customer.wonCount} deal)</span>
+                  )}
+                </>
+              ) : (
+                <span className="text-text-muted text-sm">Select a customer...</span>
+              )}
+              <i className="fa-solid fa-chevron-down text-[10px] text-text-muted ml-auto"></i>
+            </div>
+
+            {/* Dropdown */}
+            {showCustomerDropdown && (
+              <div className="absolute z-50 mt-1 w-full bg-white dark:bg-gray-800 border border-accent rounded-lg shadow-lg max-h-60 overflow-hidden">
+                <input
+                  ref={customerInputRef}
+                  type="text"
+                  value={customerSearch}
+                  onChange={e => setCustomerSearch(e.target.value)}
+                  onClick={e => e.stopPropagation()}
+                  placeholder="Search customers..."
+                  className="w-full px-3 py-2 border-b border-border text-sm focus:outline-none"
+                  autoFocus
+                />
+                <div className="max-h-48 overflow-y-auto">
+                  {filteredCustomers.length === 0 ? (
+                    <div className="px-3 py-4 text-center text-text-muted text-sm">No customers found</div>
+                  ) : (
+                    filteredCustomers.map((c, i) => (
+                      <div
+                        key={i}
+                        onClick={() => handleSelectCustomer(c)}
+                        className="flex items-center gap-2 px-3 py-2 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 cursor-pointer border-b border-border-light last:border-b-0"
+                      >
+                        <div className="w-8 h-8 rounded-full bg-accent text-white flex items-center justify-center font-bold text-xs">
+                          {c.name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-semibold text-text-primary text-sm">{c.name}</div>
+                          <div className="text-[11px] text-text-muted">{c.company}</div>
+                        </div>
+                        {c.wonCount > 0 && (
+                          <span className="text-[11px] font-bold text-red-500">({c.wonCount} deal)</span>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Opportunity / Deal Name */}
           <div>
-            <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">Opportunity Description *</label>
+            <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">Opportunity / Deal Name</label>
             <input
               type="text"
-              value={addFormData.name}
-              onChange={e => setAddFormData({ ...addFormData, name: e.target.value })}
-              placeholder="e.g. Cloud Server Suite Renewal"
-              className="w-full px-4 py-2.5 rounded-lg border border-border bg-bg-page"
+              value={addFormData.deal_name}
+              onChange={e => setAddFormData({ ...addFormData, deal_name: e.target.value })}
+              placeholder="e.g. Enterprise package Q3"
+              className="w-full px-3 py-2.5 rounded-lg border border-border bg-bg-page text-sm"
             />
           </div>
-          <div>
-            <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">Company</label>
-            <input
-              type="text"
-              value={addFormData.company}
-              onChange={e => setAddFormData({ ...addFormData, company: e.target.value })}
-              placeholder="Company name"
-              className="w-full px-4 py-2.5 rounded-lg border border-border bg-bg-page"
-            />
-          </div>
+
+          {/* Revenue & Stage */}
           <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">Revenue (USD)</label>
+              <input
+                type="number"
+                value={addFormData.deal_size}
+                onChange={e => setAddFormData({ ...addFormData, deal_size: e.target.value })}
+                placeholder="30000"
+                min="0"
+                className="w-full px-3 py-2.5 rounded-lg border border-border bg-bg-page text-sm"
+              />
+            </div>
             <div>
               <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">Stage</label>
               <select
                 value={addFormData.stage}
-                onChange={e => setAddFormData({ ...addFormData, stage: e.target.value as Stage, probability: DEFAULT_PROB[e.target.value] })}
-                className="w-full px-4 py-2.5 rounded-lg border border-border bg-bg-page"
+                onChange={e => setAddFormData({ ...addFormData, stage: e.target.value as Stage })}
+                className="w-full px-3 py-2.5 rounded-lg border border-border bg-bg-page text-sm"
               >
                 {STAGES.filter(s => s !== 'Closed Won' && s !== 'Closed Lost').map(s => (
                   <option key={s} value={s}>{s}</option>
                 ))}
               </select>
             </div>
-            <div>
-              <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">Expected Close Date</label>
-              <input
-                type="date"
-                value={addFormData.close_date}
-                onChange={e => setAddFormData({ ...addFormData, close_date: e.target.value })}
-                className="w-full px-4 py-2.5 rounded-lg border border-border bg-bg-page"
-              />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">Revenue ($)</label>
-              <input
-                type="number"
-                value={addFormData.deal_size}
-                onChange={e => setAddFormData({ ...addFormData, deal_size: e.target.value })}
-                placeholder="0"
-                className="w-full px-4 py-2.5 rounded-lg border border-border bg-bg-page"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">Confidence (%)</label>
-              <div className="flex items-center gap-3">
-                <input
-                  type="range"
-                  min="0"
-                  max="100"
-                  value={addFormData.probability}
-                  onChange={e => setAddFormData({ ...addFormData, probability: parseInt(e.target.value) })}
-                  className="flex-1"
-                />
-                <span className="text-sm font-bold w-10 text-right" style={{ color: probColor(addFormData.probability) }}>
-                  {addFormData.probability}%
-                </span>
-              </div>
-            </div>
           </div>
 
-          {/* EV Preview */}
-          <div className="flex items-center justify-between p-4 rounded-lg bg-gradient-to-r from-indigo-50 to-purple-50 dark:from-indigo-900/30 dark:to-purple-900/30 border border-indigo-200 dark:border-indigo-800">
-            <span className="text-xs font-semibold text-accent flex items-center gap-1.5">
-              <i className="fa-solid fa-bolt"></i>Expected Value = Revenue × Confidence
-            </span>
-            <span className="text-lg font-extrabold text-accent">
-              {fmtCurrency(Math.round((parseFloat(addFormData.deal_size) || 0) * addFormData.probability / 100))}
-            </span>
-          </div>
-
+          {/* Source & Assign To */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">Lead Source</label>
+              <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">Source</label>
               <select
                 value={addFormData.source}
                 onChange={e => setAddFormData({ ...addFormData, source: e.target.value as Source })}
-                className="w-full px-4 py-2.5 rounded-lg border border-border bg-bg-page"
+                className="w-full px-3 py-2.5 rounded-lg border border-border bg-bg-page text-sm"
               >
                 <option value="">— Select source —</option>
                 {SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
             <div>
-              <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">Last Activity</label>
+              <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">
+                {currentUser?.role === 'manager' ? 'Assign To' : 'Assigned To'}
+              </label>
               <select
-                value={addFormData.last_activity}
-                onChange={e => setAddFormData({ ...addFormData, last_activity: e.target.value as ActivityType })}
-                className="w-full px-4 py-2.5 rounded-lg border border-border bg-bg-page"
+                value={addFormData.assigned_to || currentUser?.id || ''}
+                onChange={e => setAddFormData({ ...addFormData, assigned_to: e.target.value })}
+                disabled={currentUser?.role !== 'manager'}
+                className="w-full px-3 py-2.5 rounded-lg border border-border bg-bg-page text-sm disabled:opacity-70"
               >
-                {ACTIVITY_TYPES.map(t => <option key={t} value={t}>📞 {t}</option>)}
+                {assignableTeam.map(a => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}{a.role === 'manager' ? ' (Manager)' : ''}{a.id === currentUser?.id ? ' (you)' : ''}
+                  </option>
+                ))}
               </select>
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">Notes (Optional)</label>
-            <textarea
-              value={addFormData.notes}
-              onChange={e => setAddFormData({ ...addFormData, notes: e.target.value })}
-              rows={2}
-              className="w-full px-4 py-2.5 rounded-lg border border-border bg-bg-page resize-none"
-              placeholder="Additional details..."
-            />
-          </div>
+          {/* Assign hint */}
+          {currentUser?.role === 'manager' ? (
+            <p className="text-[11px] text-text-muted">
+              As a Manager, you can assign this deal to any team member — or manage it yourself.
+            </p>
+          ) : (
+            <p className="text-[11px] text-text-muted">
+              This deal will be automatically assigned to you ({currentUser?.name}).
+            </p>
+          )}
 
+          {/* Actions */}
           <div className="flex gap-3 pt-2">
             <button
               onClick={() => setShowAddModal(false)}
@@ -1167,13 +1158,141 @@ export function DealManagement() {
             </button>
             <button
               onClick={handleAddDeal}
-              disabled={!addFormData.name.trim()}
+              disabled={!addFormData.customer}
               className="flex-1 px-4 py-2.5 bg-accent text-white font-semibold rounded-lg hover:bg-indigo-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <i className="fa-solid fa-check mr-1.5"></i>Create Deal
             </button>
           </div>
         </div>
+      </Modal>
+
+      {/* ═══ EDIT DEAL MODAL ═══ */}
+      <Modal isOpen={showEditModal} onClose={() => setShowEditModal(false)} title="Edit Deal" size="lg">
+        {editFormData && (
+          <div className="space-y-4">
+            {/* Contact Name & Company */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">Contact Name</label>
+                <input
+                  type="text"
+                  value={editFormData.name}
+                  onChange={e => setEditFormData({ ...editFormData, name: e.target.value })}
+                  className="w-full px-3 py-2.5 rounded-lg border border-border bg-bg-page text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">Company</label>
+                <input
+                  type="text"
+                  value={editFormData.company || ''}
+                  onChange={e => setEditFormData({ ...editFormData, company: e.target.value })}
+                  className="w-full px-3 py-2.5 rounded-lg border border-border bg-bg-page text-sm"
+                />
+              </div>
+            </div>
+
+            {/* Revenue & Probability */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">Revenue (USD)</label>
+                <input
+                  type="number"
+                  value={editFormData.deal_size}
+                  onChange={e => setEditFormData({ ...editFormData, deal_size: parseFloat(e.target.value) || 0 })}
+                  min="0"
+                  className="w-full px-3 py-2.5 rounded-lg border border-border bg-bg-page text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">Probability (%)</label>
+                <input
+                  type="number"
+                  value={editFormData.probability}
+                  onChange={e => setEditFormData({ ...editFormData, probability: parseInt(e.target.value) || 0 })}
+                  min="0"
+                  max="100"
+                  className="w-full px-3 py-2.5 rounded-lg border border-border bg-bg-page text-sm"
+                />
+              </div>
+            </div>
+
+            {/* Stage & Source */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">Stage</label>
+                <select
+                  value={editFormData.stage}
+                  onChange={e => {
+                    const newStage = e.target.value;
+                    setEditFormData({
+                      ...editFormData,
+                      stage: newStage,
+                      probability: DEFAULT_PROB[newStage] ?? editFormData.probability,
+                    });
+                  }}
+                  className="w-full px-3 py-2.5 rounded-lg border border-border bg-bg-page text-sm"
+                >
+                  {STAGES.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">Source</label>
+                <select
+                  value={editFormData.source}
+                  onChange={e => setEditFormData({ ...editFormData, source: e.target.value })}
+                  className="w-full px-3 py-2.5 rounded-lg border border-border bg-bg-page text-sm"
+                >
+                  {SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+            </div>
+
+            {/* Assign To */}
+            <div>
+              <label className="block text-xs font-bold text-text-muted uppercase mb-1.5">
+                {currentUser?.role === 'manager' ? 'Assign To' : 'Assigned To'}
+              </label>
+              <select
+                value={editFormData.owner_id}
+                onChange={e => setEditFormData({ ...editFormData, owner_id: e.target.value })}
+                disabled={currentUser?.role !== 'manager'}
+                className="w-full px-3 py-2.5 rounded-lg border border-border bg-bg-page text-sm disabled:opacity-70"
+              >
+                {assignableTeam.map(a => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}{a.role === 'manager' ? ' (Manager)' : ''}{a.id === currentUser?.id ? ' (you)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Expected Value Preview */}
+            <div className="flex items-center justify-between p-3 rounded-lg bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800">
+              <span className="text-xs font-semibold text-accent">Expected Value (EV)</span>
+              <span className="text-lg font-extrabold text-accent">
+                {fmtCurrency(Math.round(editFormData.deal_size * editFormData.probability / 100))}
+              </span>
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-3 pt-2">
+              <button
+                onClick={() => setShowEditModal(false)}
+                className="flex-1 px-4 py-2.5 border border-border rounded-lg font-semibold text-text-secondary hover:bg-gray-50 dark:hover:bg-gray-800 transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleUpdateDeal}
+                className="flex-1 px-4 py-2.5 bg-accent text-white font-semibold rounded-lg hover:bg-indigo-600 transition-all"
+              >
+                <i className="fa-solid fa-check mr-1.5"></i>Save Changes
+              </button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );
@@ -1186,17 +1305,20 @@ export function DealManagement() {
 function DealCard({
   deal,
   stageColor,
+  assignedTo,
+  latestActivity,
   onDragStart,
   onClick,
 }: {
   deal: Lead;
   stageColor: string;
+  assignedTo?: string;
+  latestActivity?: string;
   onDragStart: () => void;
   onClick: () => void;
 }) {
   const ev = Math.round(deal.deal_size * deal.probability / 100);
   const pc = probColor(deal.probability);
-  const lastAct = deal.last_activity || 'Note';
 
   return (
     <div
@@ -1206,8 +1328,13 @@ function DealCard({
       className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-3 cursor-pointer hover:shadow-md hover:border-accent/50 transition-all active:cursor-grabbing"
       style={{ borderLeftWidth: '3px', borderLeftColor: stageColor }}
     >
-      <div className="font-semibold text-text-primary dark:text-white text-sm truncate">{deal.name}</div>
-      <div className="text-[11px] text-text-muted mt-0.5 truncate">{deal.company}</div>
+      <div className="font-semibold text-text-primary dark:text-white text-xs truncate">{deal.name}</div>
+      <div className="text-[10px] text-text-muted mt-0.5 truncate">{deal.company}</div>
+      {assignedTo && (
+        <div className="text-[9px] text-text-muted mt-1">
+          <i className="fa-solid fa-user-tie"></i> {assignedTo}
+        </div>
+      )}
 
       <div className="mt-2">
         <span
@@ -1221,10 +1348,12 @@ function DealCard({
       <div className="flex items-end justify-between mt-3 pt-2 border-t border-gray-100 dark:border-gray-700">
         <span className="text-sm font-extrabold text-text-primary dark:text-white">{fmtCompact(deal.deal_size)}</span>
         <div className="text-right">
-          <div className="flex items-center gap-1 text-[10px] text-text-muted">
-            <i className={`fa-solid ${ACTIVITY_ICONS[lastAct] || 'fa-circle'} text-[9px]`}></i>
-            {lastAct}
-          </div>
+          {latestActivity && (
+            <div className="flex items-center gap-1 text-[10px] text-text-muted">
+              <i className={`fa-solid ${ACTIVITY_ICONS[latestActivity] || 'fa-circle'} text-[9px]`}></i>
+              {latestActivity}
+            </div>
+          )}
           <div className="text-[10px] text-text-muted mt-0.5">EV: {fmtCompact(ev)}</div>
         </div>
       </div>
