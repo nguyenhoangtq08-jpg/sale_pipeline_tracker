@@ -1,478 +1,582 @@
-import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
-import { supabase } from '../lib/supabase';
-import type { Lead, Activity, Account, Toast, Notification, Page, ScheduledTodo, LeadRules } from '../types';
+import { createContext, useContext, useState, useEffect, useCallback, useMemo, type ReactNode } from 'react';
+import type { Lead, Activity, User, Toast } from '../types';
 
-interface AppContextType {
-  // Auth
-  currentUser: Account | null;
-  signIn: (account: Account) => Promise<void>;
-  signOut: () => void;
-  isAuthLoading: boolean;
-
-  // Team member filter (manager only)
-  selectedMemberId: string | null;
-  setSelectedMemberId: (id: string | null) => void;
-  teamMembers: Account[];
-
-  // Leads
+interface AppState {
+  currentUser: User | null;
+  currentPage: string;
   leads: Lead[];
-  loadLeads: () => Promise<void>;
-  addLead: (lead: Omit<Lead, 'id' | 'created_at' | 'updated_at'>) => Promise<Lead | null>;
-  updateLead: (id: string, updates: Partial<Lead>) => Promise<void>;
-  deleteLead: (id: string) => Promise<void>;
-
-  // Activities
   activities: Activity[];
-  loadActivities: () => Promise<void>;
-  addActivity: (activity: Omit<Activity, 'id' | 'created_at'>) => Promise<Activity | null>;
-  deleteActivity: (id: string) => Promise<void>;
-
-  // Scheduled Todos
-  scheduledTodos: ScheduledTodo[];
-  loadScheduledTodos: () => Promise<void>;
-  addScheduledTodo: (todo: Omit<ScheduledTodo, 'id' | 'created_at'>) => Promise<ScheduledTodo | null>;
-  updateScheduledTodo: (id: string, updates: Partial<ScheduledTodo>) => Promise<void>;
-  toggleTodoDone: (id: string) => Promise<void>;
-  deleteScheduledTodo: (id: string) => Promise<void>;
-
-  // Lead Rules
-  leadRules: LeadRules;
-  loadLeadRules: () => Promise<void>;
-  updateLeadRules: (rules: Partial<LeadRules>) => Promise<void>;
-
-  // Navigation
-  currentPage: Page;
-  setCurrentPage: (page: Page) => void;
-  sidebarCollapsed: boolean;
-  setSidebarCollapsed: (collapsed: boolean) => void;
-
-  // Dark mode
-  darkMode: boolean;
-  toggleDarkMode: () => void;
-
-  // Toasts
-  toasts: Toast[];
-  showToast: (type: Toast['type'], message: string) => void;
-  dismissToast: (id: string) => void;
-
-  // Notifications
-  notifications: Notification[];
-  markNotificationRead: (id: string) => void;
-  markAllNotificationsRead: () => void;
-
-  // Modal states
-  showProfileModal: boolean;
-  setShowProfileModal: (show: boolean) => void;
-  showSettingsModal: boolean;
-  setShowSettingsModal: (show: boolean) => void;
-  showNotificationsModal: boolean;
-  setShowNotificationsModal: (show: boolean) => void;
-  showLeadRulesModal: boolean;
-  setShowLeadRulesModal: (show: boolean) => void;
+  notifications: string[];
+  toast: Toast | null;
   selectedLead: Lead | null;
-  setSelectedLead: (lead: Lead | null) => void;
   selectedActivity: Activity | null;
-  setSelectedActivity: (activity: Activity | null) => void;
+  darkMode: boolean;
+  showAddLeadModal: boolean;
+  showAddActivityModal: boolean;
+  showProfileModal: boolean;
+  showSettingsModal: boolean;
+  showNotificationsModal: boolean;
+  showLeadRulesModal: boolean;
+  showAddDealModal: boolean;
+  activityLogMode: 'log' | 'schedule';
+  dealViewMode: 'kanban' | 'list';
+  leadViewMode: 'kanban' | 'list';
 }
 
-const AppContext = createContext<AppContextType | null>(null);
+type AppContextType = AppState & {
+  setCurrentUser: (user: User | null) => void;
+  setCurrentPage: (page: string) => void;
+  setLeads: (leads: Lead[]) => void;
+  setActivities: (activities: Activity[]) => void;
+  setNotifications: (notifications: string[]) => void;
+  setToast: (toast: Toast | null) => void;
+  setSelectedLead: (lead: Lead | null) => void;
+  setSelectedActivity: (activity: Activity | null) => void;
+  setDarkMode: (dark: boolean) => void;
+  setShowAddLeadModal: (show: boolean) => void;
+  setShowAddActivityModal: (show: boolean) => void;
+  setShowProfileModal: (show: boolean) => void;
+  setShowSettingsModal: (show: boolean) => void;
+  setShowNotificationsModal: (show: boolean) => void;
+  setShowLeadRulesModal: (show: boolean) => void;
+  setShowAddDealModal: (show: boolean) => void;
+  setActivityLogMode: (mode: 'log' | 'schedule') => void;
+  setDealViewMode: (mode: 'kanban' | 'list') => void;
+  setLeadViewMode: (mode: 'kanban' | 'list') => void;
+  addLead: (lead: Lead) => void;
+  updateLead: (lead: Lead) => void;
+  deleteLead: (id: string) => void;
+  addActivity: (activity: Activity) => void;
+  updateActivity: (activity: Activity) => void;
+  deleteActivity: (id: string) => void;
+  showToast: (message: string, type?: Toast['type']) => void;
+  hideToast: () => void;
+  logout: () => void;
+  login: (user: User) => void;
+  getFilteredLeads: () => Lead[];
+  getFilteredActivities: () => Activity[];
+  getLeadById: (id: string) => Lead | undefined;
+  getActivitiesForLead: (leadId: string) => Activity[];
+  getTeamPerformance: () => { name: string; deals: number; revenue: number; winRate: number }[];
+  getPipelineData: () => { stage: string; count: number; value: number }[];
+  getRevenueByMonth: () => { month: string; value: number }[];
+  getLeadSourceDistribution: () => { source: string; count: number }[];
+  getTemperatureMatrix: () => { temperature: string; count: number; value: number }[];
+}
 
-const DEFAULT_LEAD_RULES: LeadRules = {
-  id: 'default',
-  warm_days: 7,
-  cold_days: 14,
-  updated_at: new Date().toISOString(),
-  updated_by: null,
+const AppContext = createContext<AppContextType | undefined>(undefined);
+
+const STORAGE_KEYS = {
+  LEADS: 'salestrack_leads',
+  ACTS: 'salestrack_activities',
+  USER: 'salestrack_user',
+  DARK_MODE: 'salestrack_dark_mode',
+  NOTIFICATIONS: 'salestrack_notifications',
 };
 
+// Defensive localStorage read - returns null if anything fails
+function safeStorageGet(key: string): string | null {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return null;
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+// Defensive localStorage write
+function safeStorageSet(key: string, value: string): void {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem(key, value);
+    }
+  } catch {
+    // Silently fail if localStorage is unavailable
+  }
+}
+
+// Defensive localStorage remove
+function safeStorageRemove(key: string): void {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.removeItem(key);
+    }
+  } catch {
+    // Silently fail
+  }
+}
+
+// Safe JSON parse with fallback
+function safeJsonParse<T>(json: string | null, fallback: T): T {
+  if (!json) return fallback;
+  try {
+    return JSON.parse(json) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+// Seed data for initial load
+function getSeedLeads(): Lead[] {
+  return [
+    {
+      id: '1', name: 'TechCorp Vietnam', company: 'TechCorp Vietnam',
+      email: 'contact@techcorp.vn', phone: '+84-28-1234-5678',
+      source: 'Website', stage: 'Prospecting', temperature: 'Hot',
+      deal_size: 150000, probability: 25, assigned_to: '1',
+      last_contact: '2024-03-15', notes: 'Interested in enterprise package',
+      created_at: '2024-03-10T08:00:00Z', updated_at: '2024-03-15T14:30:00Z',
+    },
+    {
+      id: '2', name: 'Global Solutions Ltd', company: 'Global Solutions Ltd',
+      email: 'sales@globalsolutions.com', phone: '+1-555-0123',
+      source: 'Referral', stage: 'Qualification', temperature: 'Warm',
+      deal_size: 75000, probability: 40, assigned_to: '2',
+      last_contact: '2024-03-14', notes: 'Multi-location deployment needed',
+      created_at: '2024-03-08T10:00:00Z', updated_at: '2024-03-14T16:00:00Z',
+    },
+    {
+      id: '3', name: 'Innovation Hub', company: 'Innovation Hub',
+      email: 'procurement@innovationhub.io', phone: '+44-20-7946-0958',
+      source: 'Trade Show', stage: 'Proposal', temperature: 'Hot',
+      deal_size: 200000, probability: 60, assigned_to: '1',
+      last_contact: '2024-03-13', notes: 'Custom integration requirements',
+      created_at: '2024-03-05T09:00:00Z', updated_at: '2024-03-13T11:00:00Z',
+    },
+    {
+      id: '4', name: 'DataFlow Systems', company: 'DataFlow Systems',
+      email: 'info@dataflow.sys', phone: '+49-30-1234-5678',
+      source: 'LinkedIn', stage: 'Negotiation', temperature: 'Hot',
+      deal_size: 120000, probability: 80, assigned_to: '3',
+      last_contact: '2024-03-12', notes: 'Pricing negotiation in progress',
+      created_at: '2024-03-01T08:00:00Z', updated_at: '2024-03-12T15:00:00Z',
+    },
+    {
+      id: '5', name: 'Cloud Nine Inc', company: 'Cloud Nine Inc',
+      email: 'hello@cloudnine.com', phone: '+1-555-0456',
+      source: 'Cold Call', stage: 'Closed Won', temperature: 'Hot',
+      deal_size: 95000, probability: 100, assigned_to: '2',
+      last_contact: '2024-03-11', notes: 'Contract signed, implementation started',
+      created_at: '2024-02-20T10:00:00Z', updated_at: '2024-03-11T09:00:00Z',
+    },
+    {
+      id: '6', name: 'MegaCorp Industries', company: 'MegaCorp Industries',
+      email: 'business@megacorp.com', phone: '+81-3-1234-5678',
+      source: 'Website', stage: 'Closed Lost', temperature: 'Cold',
+      deal_size: 300000, probability: 0, assigned_to: '1',
+      last_contact: '2024-03-10', notes: 'Budget cut, postponed to Q3',
+      created_at: '2024-02-15T08:00:00Z', updated_at: '2024-03-10T14:00:00Z',
+    },
+    {
+      id: '7', name: 'StartupXYZ', company: 'StartupXYZ',
+      email: 'founders@startupxyz.io', phone: '+1-555-0789',
+      source: 'Referral', stage: 'Prospecting', temperature: 'Warm',
+      deal_size: 45000, probability: 15, assigned_to: '3',
+      last_contact: '2024-03-09', notes: 'Early stage, needs nurturing',
+      created_at: '2024-03-08T11:00:00Z', updated_at: '2024-03-09T10:00:00Z',
+    },
+    {
+      id: '8', name: 'Enterprise Solutions', company: 'Enterprise Solutions',
+      email: 'sales@enterprise.sol', phone: '+33-1-23-45-67-89',
+      source: 'Trade Show', stage: 'Qualification', temperature: 'Cold',
+      deal_size: 180000, probability: 30, assigned_to: '2',
+      last_contact: '2024-03-08', notes: 'Evaluating multiple vendors',
+      created_at: '2024-03-01T09:00:00Z', updated_at: '2024-03-08T16:00:00Z',
+    },
+  ];
+}
+
+function getSeedActivities(): Activity[] {
+  return [
+    {
+      id: '1', lead_id: '1', lead_name: 'TechCorp Vietnam', type: 'Call',
+      notes: 'Initial discovery call. They are interested in our enterprise package.',
+      date: '2024-03-15T14:00:00Z', created_at: '2024-03-15T14:30:00Z',
+      owner_id: '1', company: 'TechCorp Vietnam', stage: 'Prospecting',
+    },
+    {
+      id: '2', lead_id: '2', lead_name: 'Global Solutions Ltd', type: 'Email',
+      notes: 'Sent product brochure and pricing information.',
+      date: '2024-03-14T10:00:00Z', created_at: '2024-03-14T10:30:00Z',
+      owner_id: '2', company: 'Global Solutions Ltd', stage: 'Qualification',
+    },
+    {
+      id: '3', lead_id: '3', lead_name: 'Innovation Hub', type: 'Meeting',
+      notes: 'Technical demo went well. Custom integration discussion.',
+      date: '2024-03-13T11:00:00Z', created_at: '2024-03-13T11:30:00Z',
+      owner_id: '1', company: 'Innovation Hub', stage: 'Proposal',
+    },
+    {
+      id: '4', lead_id: '4', lead_name: 'DataFlow Systems', type: 'Call',
+      notes: 'Pricing negotiation. They want a 15% discount.',
+      date: '2024-03-12T15:00:00Z', created_at: '2024-03-12T15:30:00Z',
+      owner_id: '3', company: 'DataFlow Systems', stage: 'Negotiation',
+    },
+    {
+      id: '5', lead_id: '5', lead_name: 'Cloud Nine Inc', type: 'Meeting',
+      notes: 'Contract signing ceremony. Deal closed!',
+      date: '2024-03-11T09:00:00Z', created_at: '2024-03-11T09:30:00Z',
+      owner_id: '2', company: 'Cloud Nine Inc', stage: 'Closed Won',
+    },
+    {
+      id: '6', lead_id: '1', lead_name: 'TechCorp Vietnam', type: 'Email',
+      notes: 'Follow-up email with case studies.',
+      date: '2024-03-16T09:00:00Z', created_at: '2024-03-15T16:00:00Z',
+      owner_id: '1', company: 'TechCorp Vietnam', stage: 'Prospecting',
+    },
+    {
+      id: '7', lead_id: '3', lead_name: 'Innovation Hub', type: 'Call',
+      notes: 'Technical requirements clarification call.',
+      date: '2024-03-17T14:00:00Z', created_at: '2024-03-13T12:00:00Z',
+      owner_id: '1', company: 'Innovation Hub', stage: 'Proposal',
+    },
+    {
+      id: '8', lead_id: '6', lead_name: 'MegaCorp Industries', type: 'Meeting',
+      notes: 'Budget discussion - they had a budget cut.',
+      date: '2024-03-10T14:00:00Z', created_at: '2024-03-10T14:30:00Z',
+      owner_id: '1', company: 'MegaCorp Industries', stage: 'Closed Lost',
+    },
+  ];
+}
+
+function getSeedNotifications(): string[] {
+  return [
+    'New lead assigned: TechCorp Vietnam',
+    'Deal won: Cloud Nine Inc - $95,000',
+    'Meeting scheduled with Innovation Hub',
+    'Follow-up required: Global Solutions Ltd',
+    'Pipeline alert: 3 deals in negotiation',
+  ];
+}
+
+// Load leads with fallback to seed data
+function loadLeads(): Lead[] {
+  const stored = safeStorageGet(STORAGE_KEYS.LEADS);
+  if (stored) {
+    const parsed = safeJsonParse<Lead[]>(stored, []);
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+  }
+  const seed = getSeedLeads();
+  safeStorageSet(STORAGE_KEYS.LEADS, JSON.stringify(seed));
+  return seed;
+}
+
+// Load activities with fallback to seed data
+function loadActivities(): Activity[] {
+  const stored = safeStorageGet(STORAGE_KEYS.ACTIVITYS);
+  if (stored) {
+    const parsed = safeJsonParse<Activity[]>(stored, []);
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+  }
+  const seed = getSeedActivities();
+  safeStorageSet(STORAGE_KEYS.ACTIVITYS, JSON.stringify(seed));
+  return seed;
+}
+
+// Load user with fallback
+function loadUser(): User | null {
+  const stored = safeStorageGet(STORAGE_KEYS.USER);
+  if (stored) {
+    return safeJsonParse<User | null>(stored, null);
+  }
+  return null;
+}
+
+// Load dark mode
+function loadDarkMode(): boolean {
+  const stored = safeStorageGet(STORAGE_KEYS.DARK_MODE);
+  if (stored) {
+    return safeJsonParse<boolean>(stored, false);
+  }
+  return false;
+}
+
+// Load notifications
+function loadNotifications(): string[] {
+  const stored = safeStorageGet(STORAGE_KEYS.NOTIFICATIONS);
+  if (stored) {
+    const parsed = safeJsonParse<string[]>(stored, []);
+    if (Array.isArray(parsed)) return parsed;
+  }
+  const seed = getSeedNotifications();
+  safeStorageSet(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(seed));
+  return seed;
+}
+
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [currentUser, setCurrentUser] = useState<Account | null>(null);
-  const [isAuthLoading, setIsAuthLoading] = useState(false);
-  const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
-  const [leads, setLeads] = useState<Lead[]>([]);
-  const [activities, setActivities] = useState<Activity[]>([]);
-  const [scheduledTodos, setScheduledTodos] = useState<ScheduledTodo[]>([]);
-  const [leadRules, setLeadRules] = useState<LeadRules>(DEFAULT_LEAD_RULES);
-  const [currentPage, setCurrentPage] = useState<Page>('dashboard');
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [darkMode, setDarkMode] = useState(() => {
-    const saved = localStorage.getItem('darkMode');
-    return saved ? JSON.parse(saved) : false;
-  });
-  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [currentUser, setCurrentUser] = useState<User | null>(loadUser);
+  const [currentPage, setCurrentPage] = useState('dashboard');
+  const [leads, setLeadsState] = useState<Lead[]>(loadLeads);
+  const [activities, setActivitiesState] = useState<Activity[]>(loadActivities);
+  const [notifications, setNotificationsState] = useState<string[]>(loadNotifications);
+  const [toast, setToast] = useState<Toast | null>(null);
+  const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+  const [selectedActivity, setSelectedActivity] = useState<Activity | null>(null);
+  const [darkMode, setDarkModeState] = useState(loadDarkMode);
+  const [showAddLeadModal, setShowAddLeadModal] = useState(false);
+  const [showAddActivityModal, setShowAddActivityModal] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
   const [showLeadRulesModal, setShowLeadRulesModal] = useState(false);
-  const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
-  const [selectedActivity, setSelectedActivity] = useState<Activity | null>(null);
-  const [notifications, setNotifications] = useState<Notification[]>([
-    { id: '1', title: 'New Lead Added', message: 'Nguyen Thi Linh was added as a new lead', time: '5 minutes ago', read: false, type: 'lead' },
-    { id: '2', title: 'Deal Moved', message: 'TechCorp Vietnam moved to Proposal stage', time: '1 hour ago', read: false, type: 'deal' },
-    { id: '3', title: 'Meeting Scheduled', message: 'Meeting with ABC Manufacturing confirmed', time: '2 hours ago', read: true, type: 'activity' },
-    { id: '4', title: 'Weekly Report Ready', message: 'Your weekly sales report is ready to view', time: '1 day ago', read: true, type: 'system' },
-  ]);
+  const [showAddDealModal, setShowAddDealModal] = useState(false);
+  const [activityLogMode, setActivityLogMode] = useState<'log' | 'schedule'>('log');
+  const [dealViewMode, setDealViewMode] = useState<'kanban' | 'list'>('kanban');
+  const [leadViewMode, setLeadViewMode] = useState<'kanban' | 'list'>('kanban');
 
-  // Team members - all for manager, only self for member
-  const teamMembers: Account[] = currentUser?.role === 'manager'
-    ? [
-        { id: '0', name: 'Anna Nguyen', initials: 'AN', email: 'anna.nguyen@salestrack.vn', role: 'manager', color: '#d97706', roleLabel: 'Account Manager' },
-        { id: '1', name: 'Duy Tran', initials: 'DT', email: 'duy.tran@salestrack.vn', role: 'member', color: '#6366f1', roleLabel: 'Account Sales' },
-        { id: '2', name: 'Mai Le', initials: 'ML', email: 'mai.le@salestrack.vn', role: 'member', color: '#10b981', roleLabel: 'Account Sales' },
-        { id: '3', name: 'Hung Vo', initials: 'HV', email: 'hung.vo@salestrack.vn', role: 'member', color: '#8b5cf6', roleLabel: 'Account Sales' },
-      ]
-    : currentUser ? [currentUser] : [];
-
+  // Persist leads
   useEffect(() => {
+    safeStorageSet(STORAGE_KEYS.LEADS, JSON.stringify(leads));
+  }, [leads]);
+
+  // Persist activities
+  useEffect(() => {
+    safeStorageSet(STORAGE_KEYS.ACTIVITYS, JSON.stringify(activities));
+  }, [activities]);
+
+  // Persist user
+  useEffect(() => {
+    if (currentUser) {
+      safeStorageSet(STORAGE_KEYS.USER, JSON.stringify(currentUser));
+    } else {
+      safeStorageRemove(STORAGE_KEYS.USER);
+    }
+  }, [currentUser]);
+
+  // Persist dark mode
+  useEffect(() => {
+    safeStorageSet(STORAGE_KEYS.DARK_MODE, JSON.stringify(darkMode));
     if (darkMode) {
       document.documentElement.classList.add('dark');
     } else {
       document.documentElement.classList.remove('dark');
     }
-    localStorage.setItem('darkMode', JSON.stringify(darkMode));
   }, [darkMode]);
 
-  const signIn = useCallback(async (account: Account) => {
-    setIsAuthLoading(true);
-    await new Promise(resolve => setTimeout(resolve, 700));
-    setCurrentUser(account);
-    setIsAuthLoading(false);
-    // Reset member filter on sign in
-    setSelectedMemberId(null);
-    showToast('success', `Welcome back, ${account.name}!`);
-  }, []);
-
-  const signOut = useCallback(() => {
-    setCurrentUser(null);
-    setLeads([]);
-    setActivities([]);
-    setScheduledTodos([]);
-    setCurrentPage('dashboard');
-    setSelectedMemberId(null);
-    showToast('info', 'You have been signed out');
-  }, []);
-
-  const loadLeads = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('leads')
-      .select('*')
-      .order('updated_at', { ascending: false });
-    if (!error && data) {
-      setLeads(data as Lead[]);
-    }
-  }, []);
-
-  const loadActivities = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('activities')
-      .select('*')
-      .order('created_at', { ascending: false });
-    if (!error && data) {
-      setActivities(data as Activity[]);
-    }
-  }, []);
-
-  const loadScheduledTodos = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('scheduled_todos')
-      .select('*')
-      .order('scheduled_date', { ascending: true });
-    if (!error && data) {
-      setScheduledTodos(data as ScheduledTodo[]);
-    }
-  }, []);
-
-  const loadLeadRules = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('lead_rules')
-      .select('*')
-      .limit(1)
-      .single();
-    if (!error && data) {
-      setLeadRules(data as LeadRules);
-    }
-  }, []);
-
-  const addLead = useCallback(async (lead: Omit<Lead, 'id' | 'created_at' | 'updated_at'>) => {
-    const { data, error } = await supabase
-      .from('leads')
-      .insert([lead])
-      .select()
-      .single();
-    if (!error && data) {
-      setLeads(prev => [data as Lead, ...prev]);
-      showToast('success', 'Lead added successfully');
-      return data as Lead;
-    }
-    showToast('error', 'Failed to add lead');
-    return null;
-  }, []);
-
-  const updateLead = useCallback(async (id: string, updates: Partial<Lead>) => {
-    const { error } = await supabase
-      .from('leads')
-      .update({ ...updates, updated_at: new Date().toISOString() })
-      .eq('id', id);
-    if (!error) {
-      setLeads(prev => prev.map(l => l.id === id ? { ...l, ...updates, updated_at: new Date().toISOString() } : l));
-      showToast('success', 'Lead updated successfully');
-    } else {
-      showToast('error', 'Failed to update lead');
-    }
-  }, []);
-
-  const deleteLead = useCallback(async (id: string) => {
-    const { error } = await supabase
-      .from('leads')
-      .delete()
-      .eq('id', id);
-    if (!error) {
-      setLeads(prev => prev.filter(l => l.id !== id));
-      showToast('success', 'Lead deleted successfully');
-    } else {
-      showToast('error', 'Failed to delete lead');
-    }
-  }, []);
-
-  const addActivity = useCallback(async (activity: Omit<Activity, 'id' | 'created_at'>) => {
-    const { data, error } = await supabase
-      .from('activities')
-      .insert([activity])
-      .select()
-      .single();
-    if (!error && data) {
-      setActivities(prev => [data as Activity, ...prev]);
-      showToast('success', 'Activity logged successfully');
-      return data as Activity;
-    }
-    showToast('error', 'Failed to log activity');
-    return null;
-  }, []);
-
-  const deleteActivity = useCallback(async (id: string) => {
-    const { error } = await supabase
-      .from('activities')
-      .delete()
-      .eq('id', id);
-    if (!error) {
-      setActivities(prev => prev.filter(a => a.id !== id));
-      showToast('success', 'Activity deleted successfully');
-    } else {
-      showToast('error', 'Failed to delete activity');
-    }
-  }, []);
-
-  const addScheduledTodo = useCallback(async (todo: Omit<ScheduledTodo, 'id' | 'created_at'>) => {
-    const { data, error } = await supabase
-      .from('scheduled_todos')
-      .insert([todo])
-      .select()
-      .single();
-    if (!error && data) {
-      setScheduledTodos(prev => [...prev, data as ScheduledTodo].sort((a, b) =>
-        new Date(a.scheduled_date).getTime() - new Date(b.scheduled_date).getTime()
-      ));
-      showToast('success', 'Task scheduled successfully');
-      return data as ScheduledTodo;
-    }
-    showToast('error', 'Failed to schedule task');
-    return null;
-  }, []);
-
-  const updateScheduledTodo = useCallback(async (id: string, updates: Partial<ScheduledTodo>) => {
-    const { error } = await supabase
-      .from('scheduled_todos')
-      .update(updates)
-      .eq('id', id);
-    if (!error) {
-      setScheduledTodos(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
-    }
-  }, []);
-
-  const toggleTodoDone = useCallback(async (id: string) => {
-    const todo = scheduledTodos.find(t => t.id === id);
-    if (!todo) return;
-
-    const newDoneStatus = !todo.done;
-    const { error } = await supabase
-      .from('scheduled_todos')
-      .update({ done: newDoneStatus })
-      .eq('id', id);
-
-    if (!error) {
-      setScheduledTodos(prev => prev.map(t => t.id === id ? { ...t, done: newDoneStatus } : t));
-      showToast('success', newDoneStatus ? 'Task marked as complete' : 'Task marked as incomplete');
-    }
-  }, [scheduledTodos]);
-
-  const deleteScheduledTodo = useCallback(async (id: string) => {
-    const { error } = await supabase
-      .from('scheduled_todos')
-      .delete()
-      .eq('id', id);
-    if (!error) {
-      setScheduledTodos(prev => prev.filter(t => t.id !== id));
-      showToast('success', 'Scheduled task deleted');
-    }
-  }, []);
-
-  const updateLeadRules = useCallback(async (rules: Partial<LeadRules>) => {
-    const { error } = await supabase
-      .from('lead_rules')
-      .update({ ...rules, updated_at: new Date().toISOString(), updated_by: currentUser?.id || null })
-      .eq('id', leadRules.id);
-    if (!error) {
-      setLeadRules(prev => ({ ...prev, ...rules, updated_at: new Date().toISOString() }));
-      showToast('success', 'Lead rules updated');
-    }
-  }, [leadRules, currentUser]);
-
-  const showToast = useCallback((type: Toast['type'], message: string) => {
-    const id = Date.now().toString();
-    setToasts((prev: Toast[]) => [...prev, { id, type, message }]);
-    setTimeout(() => {
-      setToasts((prev: Toast[]) => prev.filter(t => t.id !== id));
-    }, 3000);
-  }, []);
-
-  const dismissToast = useCallback((id: string) => {
-    setToasts((prev: Toast[]) => prev.filter(t => t.id !== id));
-  }, []);
-
-  const toggleDarkMode = useCallback(() => {
-    setDarkMode((prev: boolean) => !prev);
-  }, []);
-
-  const markNotificationRead = useCallback((id: string) => {
-    setNotifications((prev: Notification[]) => prev.map(n => n.id === id ? { ...n, read: true } : n));
-  }, []);
-
-  const markAllNotificationsRead = useCallback(() => {
-    setNotifications((prev: Notification[]) => prev.map(n => ({ ...n, read: true })));
-  }, []);
-
+  // Persist notifications
   useEffect(() => {
-    if (currentUser) {
-      loadLeads();
-      loadActivities();
-      loadScheduledTodos();
-      loadLeadRules();
-    }
-  }, [currentUser, loadLeads, loadActivities, loadScheduledTodos, loadLeadRules]);
+    safeStorageSet(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(notifications));
+  }, [notifications]);
 
-  return (
-    <AppContext.Provider value={{
-      currentUser,
-      signIn,
-      signOut,
-      isAuthLoading,
-      selectedMemberId,
-      setSelectedMemberId,
-      teamMembers,
-      leads,
-      loadLeads,
-      addLead,
-      updateLead,
-      deleteLead,
-      activities,
-      loadActivities,
-      addActivity,
-      deleteActivity,
-      scheduledTodos,
-      loadScheduledTodos,
-      addScheduledTodo,
-      updateScheduledTodo,
-      toggleTodoDone,
-      deleteScheduledTodo,
-      leadRules,
-      loadLeadRules,
-      updateLeadRules,
-      currentPage,
-      setCurrentPage,
-      sidebarCollapsed,
-      setSidebarCollapsed,
-      darkMode,
-      toggleDarkMode,
-      toasts,
-      showToast,
-      dismissToast,
-      notifications,
-      markNotificationRead,
-      markAllNotificationsRead,
-      showProfileModal,
-      setShowProfileModal,
-      showSettingsModal,
-      setShowSettingsModal,
-      showNotificationsModal,
-      setShowNotificationsModal,
-      showLeadRulesModal,
-      setShowLeadRulesModal,
-      selectedLead,
-      setSelectedLead,
-      selectedActivity,
-      setSelectedActivity,
-    }}>
-      {children}
-    </AppContext.Provider>
-  );
+  const showToastFn = useCallback((message: string, type: Toast['type'] = 'info') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  }, []);
+
+  const hideToast = useCallback(() => setToast(null), []);
+
+  const logout = useCallback(() => {
+    setCurrentUser(null);
+    safeStorageRemove(STORAGE_KEYS.USER);
+  }, []);
+
+  const login = useCallback((user: User) => {
+    setCurrentUser(user);
+  }, []);
+
+  // Defensive: always return array, never crash on empty/null
+  const getFilteredLeads = useCallback((): Lead[] => {
+    if (!Array.isArray(leads)) return [];
+    if (!currentUser) return [];
+    if (currentUser.role === 'manager') return leads;
+    return leads.filter(l => l && l.assigned_to === currentUser.id);
+  }, [leads, currentUser]);
+
+  // Defensive: always return array
+  const getFilteredActivities = useCallback((): Activity[] => {
+    if (!Array.isArray(activities)) return [];
+    if (!currentUser) return [];
+    if (currentUser.role === 'manager') return activities;
+    return activities.filter(a => a && a.owner_id === currentUser.id);
+  }, [activities, currentUser]);
+
+  const getLeadById = useCallback((id: string): Lead | undefined => {
+    if (!Array.isArray(leads) || !id) return undefined;
+    return leads.find(l => l && l.id === id);
+  }, [leads]);
+
+  const getActivitiesForLead = useCallback((leadId: string): Activity[] => {
+    if (!Array.isArray(activities) || !leadId) return [];
+    return activities.filter(a => a && a.lead_id === leadId);
+  }, [activities]);
+
+  const addLead = useCallback((lead: Lead) => {
+    setLeadsState(prev => {
+      const safePrev = Array.isArray(prev) ? prev : [];
+      return [...safePrev, lead];
+    });
+  }, []);
+
+  const updateLead = useCallback((updatedLead: Lead) => {
+    setLeadsState(prev => {
+      const safePrev = Array.isArray(prev) ? prev : [];
+      return safePrev.map(l => (l && l.id === updatedLead.id ? updatedLead : l));
+    });
+  }, []);
+
+  const deleteLead = useCallback((id: string) => {
+    setLeadsState(prev => {
+      const safePrev = Array.isArray(prev) ? prev : [];
+      return safePrev.filter(l => l && l.id !== id);
+    });
+    setActivitiesState(prev => {
+      const safePrev = Array.isArray(prev) ? prev : [];
+      return safePrev.filter(a => a && a.lead_id !== id);
+    });
+  }, []);
+
+  const addActivity = useCallback((activity: Activity) => {
+    setActivitiesState(prev => {
+      const safePrev = Array.isArray(prev) ? prev : [];
+      return [...safePrev, activity];
+    });
+  }, []);
+
+  const updateActivity = useCallback((updatedActivity: Activity) => {
+    setActivitiesState(prev => {
+      const safePrev = Array.isArray(prev) ? prev : [];
+      return safePrev.map(a => (a && a.id === updatedActivity.id ? updatedActivity : a));
+    });
+  }, []);
+
+  const deleteActivity = useCallback((id: string) => {
+    setActivitiesState(prev => {
+      const safePrev = Array.isArray(prev) ? prev : [];
+      return safePrev.filter(a => a && a.id !== id);
+    });
+  }, []);
+
+  // Defensive team performance
+  const getTeamPerformance = useCallback(() => {
+    const safeLeads = Array.isArray(leads) ? leads : [];
+    const teamMembers = [
+      { id: '1', name: 'Duy Tran' },
+      { id: '2', name: 'Mai Le' },
+      { id: '3', name: 'Hung Vo' },
+    ];
+    return teamMembers.map(member => {
+      const memberLeads = safeLeads.filter(l => l && l.assigned_to === member.id);
+      const won = memberLeads.filter(l => l && l.stage === 'Closed Won');
+      const total = memberLeads.filter(l => l && ['Closed Won', 'Closed Lost'].includes(l.stage));
+      const revenue = won.reduce((sum, l) => sum + (Number(l.deal_size) || 0), 0);
+      const winRate = total.length > 0 ? (won.length / total.length) * 100 : 0;
+      return { name: member.name, deals: memberLeads.length, revenue, winRate };
+    });
+  }, [leads]);
+
+  // Defensive pipeline data
+  const getPipelineData = useCallback(() => {
+    const safeLeads = Array.isArray(leads) ? leads : [];
+    const stages = ['Prospecting', 'Qualification', 'Proposal', 'Negotiation', 'Closed Won', 'Closed Lost'];
+    return stages.map(stage => {
+      const stageLeads = safeLeads.filter(l => l && l.stage === stage);
+      return {
+        stage,
+        count: stageLeads.length,
+        value: stageLeads.reduce((sum, l) => sum + (Number(l.deal_size) || 0), 0),
+      };
+    });
+  }, [leads]);
+
+  // Defensive revenue by month
+  const getRevenueByMonth = useCallback(() => {
+    const safeLeads = Array.isArray(leads) ? leads : [];
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'];
+    return months.map(month => {
+      const monthLeads = safeLeads.filter(l => {
+        if (!l || !l.updated_at) return false;
+        try {
+          return l.updated_at.includes(`2024-${months.indexOf(month) + 1}-`) && l.stage === 'Closed Won';
+        } catch {
+          return false;
+        }
+      });
+      return { month, value: monthLeads.reduce((sum, l) => sum + (Number(l.deal_size) || 0), 0) };
+    });
+  }, [leads]);
+
+  // Defensive lead source distribution
+  const getLeadSourceDistribution = useCallback(() => {
+    const safeLeads = Array.isArray(leads) ? leads : [];
+    const sources: Record<string, number> = {};
+    safeLeads.forEach(l => {
+      if (l && l.source) {
+        sources[l.source] = (sources[l.source] || 0) + 1;
+      }
+    });
+    return Object.entries(sources).map(([source, count]) => ({ source, count }));
+  }, [leads]);
+
+  // Defensive temperature matrix
+  const getTemperatureMatrix = useCallback(() => {
+    const safeLeads = Array.isArray(leads) ? leads : [];
+    const temps = ['Hot', 'Warm', 'Cold'];
+    return temps.map(temperature => {
+      const tempLeads = safeLeads.filter(l => l && l.temperature === temperature);
+      return {
+        temperature,
+        count: tempLeads.length,
+        value: tempLeads.reduce((sum, l) => sum + (Number(l.deal_size) || 0), 0),
+      };
+    });
+  }, [leads]);
+
+  const setLeads = useCallback((newLeads: Lead[]) => {
+    setLeadsState(Array.isArray(newLeads) ? newLeads : []);
+  }, []);
+
+  const setActivities = useCallback((newActivities: Activity[]) => {
+    setActivitiesState(Array.isArray(newActivities) ? newActivities : []);
+  }, []);
+
+  const setNotifications = useCallback((newNotifications: string[]) => {
+    setNotificationsState(Array.isArray(newNotifications) ? newNotifications : []);
+  }, []);
+
+  const setDarkMode = useCallback((dark: boolean) => {
+    setDarkModeState(dark);
+  }, []);
+
+  const value = useMemo(() => ({
+    currentUser, currentPage, leads, activities, notifications, toast,
+    selectedLead, selectedActivity, darkMode, showAddLeadModal, showAddActivityModal,
+    showProfileModal, showSettingsModal, showNotificationsModal, showLeadRulesModal,
+    showAddDealModal, activityLogMode, dealViewMode, leadViewMode,
+    setCurrentUser, setCurrentPage, setLeads, setActivities, setNotifications,
+    setToast, setSelectedLead, setSelectedActivity, setDarkMode,
+    setShowAddLeadModal, setShowAddActivityModal, setShowProfileModal,
+    setShowSettingsModal, setShowNotificationsModal, setShowLeadRulesModal,
+    setShowAddDealModal, setActivityLogMode, setDealViewMode, setLeadViewMode,
+    addLead, updateLead, deleteLead, addActivity, updateActivity, deleteActivity,
+    showToast: showToastFn, hideToast, logout, login,
+    getFilteredLeads, getFilteredActivities, getLeadById, getActivitiesForLead,
+    getTeamPerformance, getPipelineData, getRevenueByMonth, getLeadSourceDistribution,
+    getTemperatureMatrix,
+  }), [
+    currentUser, currentPage, leads, activities, notifications, toast,
+    selectedLead, selectedActivity, darkMode, showAddLeadModal, showAddActivityModal,
+    showProfileModal, showSettingsModal, showNotificationsModal, showLeadRulesModal,
+    showAddDealModal, activityLogMode, dealViewMode, leadViewMode,
+    showToastFn, hideToast, logout, login,
+    addLead, updateLead, deleteLead, addActivity, updateActivity, deleteActivity,
+    getFilteredLeads, getFilteredActivities, getLeadById, getActivitiesForLead,
+    getTeamPerformance, getPipelineData, getRevenueByMonth, getLeadSourceDistribution,
+    getTemperatureMatrix,
+  ]);
+
+  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
 
 export function useApp() {
   const context = useContext(AppContext);
-  if (!context) {
-    throw new Error('useApp must be used within AppProvider');
-  }
+  if (!context) throw new Error('useApp must be used within AppProvider');
   return context;
 }
 
-// Helper hook to get filtered data based on role and selected member
 export function useFilteredData() {
-  const { currentUser, selectedMemberId, leads, activities, scheduledTodos } = useApp();
-
-  const getFilteredLeads = useCallback(() => {
-    if (!currentUser) return [];
-
-    if (currentUser.role === 'member') {
-      // Member sees only their own leads
-      return leads.filter(l => l.owner_id === currentUser.id);
-    }
-
-    // Manager sees based on filter
-    if (selectedMemberId === null) {
-      return leads; // All members
-    }
-    return leads.filter(l => l.owner_id === selectedMemberId);
-  }, [currentUser, selectedMemberId, leads]);
-
-  const getFilteredActivities = useCallback(() => {
-    if (!currentUser) return [];
-
-    if (currentUser.role === 'member') {
-      return activities.filter(a => a.owner_id === currentUser.id);
-    }
-
-    if (selectedMemberId === null) {
-      return activities;
-    }
-    return activities.filter(a => a.owner_id === selectedMemberId);
-  }, [currentUser, selectedMemberId, activities]);
-
-  const getFilteredScheduledTodos = useCallback(() => {
-    if (!currentUser) return [];
-
-    if (currentUser.role === 'member') {
-      return scheduledTodos.filter(t => t.owner_id === currentUser.id);
-    }
-
-    if (selectedMemberId === null) {
-      return scheduledTodos;
-    }
-    return scheduledTodos.filter(t => t.owner_id === selectedMemberId);
-  }, [currentUser, selectedMemberId, scheduledTodos]);
-
-  return {
-    getFilteredLeads,
-    getFilteredActivities,
-    getFilteredScheduledTodos,
-  };
+  const { getFilteredLeads, getFilteredActivities } = useApp();
+  return useMemo(() => ({
+    leads: getFilteredLeads(),
+    activities: getFilteredActivities(),
+  }), [getFilteredLeads, getFilteredActivities]);
 }
