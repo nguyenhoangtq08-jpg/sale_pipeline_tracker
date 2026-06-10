@@ -187,7 +187,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       .from('lead_rules')
       .select('*')
       .limit(1)
-      .maybesingle();
+      .maybeSingle();
     if (!error && data) {
       setLeadRules(data as LeadRules);
     }
