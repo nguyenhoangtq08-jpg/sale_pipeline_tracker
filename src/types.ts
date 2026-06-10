@@ -49,7 +49,8 @@ export interface ScheduledTodo {
   scheduled_time: string | null;
   agenda: string;
   done: boolean;
-  owner_id: string;
+  owner_id: string;      // who created this task
+  assigned_to: string | null;  // who is responsible for executing it (null = owner)
   created_at: string;
 }
 
