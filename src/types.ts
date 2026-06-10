@@ -41,6 +41,7 @@ export interface Activity {
 
 export interface ScheduledTodo {
   id: string;
+  type: string;
   lead_id: string | null;
   lead_name: string;
   company: string | null;
@@ -50,6 +51,7 @@ export interface ScheduledTodo {
   agenda: string;
   done: boolean;
   owner_id: string;
+  assigned_to?: string;
   created_at: string;
 }
 

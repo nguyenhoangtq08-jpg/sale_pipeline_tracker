@@ -89,8 +89,13 @@ export function ActivityLog() {
 
   // Active todos for today
   const today = new Date().toDateString();
-  const todayTodos = filteredScheduledTodos.filter(s => new Date(s.scheduled_date).toDateString() === today);
-  const upcomingTodos = filteredScheduledTodos
+  const memberFilteredTodos = useMemo(() => {
+    if (!isManager || !memberFilter) return filteredScheduledTodos;
+    return filteredScheduledTodos.filter(s => s.assigned_to === memberFilter || s.owner_id === memberFilter);
+  }, [filteredScheduledTodos, isManager, memberFilter]);
+
+  const todayTodos = memberFilteredTodos.filter(s => new Date(s.scheduled_date).toDateString() === today);
+  const upcomingTodos = memberFilteredTodos
     .filter(s => new Date(s.scheduled_date) > new Date() && new Date(s.scheduled_date).toDateString() !== today)
     .sort((a, b) => new Date(a.scheduled_date).getTime() - new Date(b.scheduled_date).getTime())
     .slice(0, 3);
@@ -99,7 +104,7 @@ export function ActivityLog() {
   const kpiCalls = filteredActivities.filter(a => a.type === 'Call').length;
   const kpiEmails = filteredActivities.filter(a => a.type === 'Email').length;
   const kpiMeetings = filteredActivities.filter(a => a.type === 'Meeting').length;
-  const kpiTodayTasks = todayTodos.filter(s => !s.done).length;
+  const kpiTodayTasks = memberFilteredTodos.filter(s => new Date(s.scheduled_date).toDateString() === today && !s.done).length;
   const coldLeads = filteredLeads.filter(l =>
     !['Closed Won', 'Closed Lost'].includes(l.stage) &&
     getLeadTemp(l.id, filteredActivities, leadRules.warm_days, leadRules.cold_days) === 'cold'
@@ -311,6 +316,33 @@ export function ActivityLog() {
               </h3>
               <p className="text-xs text-text-muted mt-0.5">{formatDateFull(new Date().toISOString())}</p>
             </div>
+            {isManager && (
+              <div className="flex items-center gap-2">
+                {teamMembers.map(m => (
+                  <button
+                    key={m.id}
+                    onClick={() => setMemberFilter(memberFilter === m.id ? '' : m.id)}
+                    className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold transition-all ${
+                      memberFilter === m.id
+                        ? 'ring-2 ring-accent ring-offset-2'
+                        : ''
+                    }`}
+                    style={{ background: m.color, color: 'white' }}
+                    title={m.name}
+                  >
+                    {m.initials}
+                  </button>
+                ))}
+                {memberFilter && (
+                  <button
+                    onClick={() => setMemberFilter('')}
+                    className="text-[10px] text-text-muted hover:text-text-primary"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            )}
           </div>
           <div className="px-4 pb-4 max-h-[280px] overflow-y-auto">
             {todayTodos.length === 0 && upcomingTodos.length === 0 ? (
@@ -320,7 +352,11 @@ export function ActivityLog() {
               </div>
             ) : (
               <>
-                {todayTodos.map(todo => (
+                {todayTodos.map(todo => {
+                  const typeCfg = TYPE_CONFIG[todo.type as ActivityType] || TYPE_CONFIG['Call'];
+                  const isAssigned = todo.assigned_to && todo.assigned_to !== todo.owner_id;
+                  const assignee = isAssigned ? teamMembers.find(m => m.id === todo.assigned_to) : null;
+                  return (
                   <div
                     key={todo.id}
                     className={`flex items-start gap-3 p-3 rounded-lg mb-2 border transition-all ${
@@ -339,13 +375,22 @@ export function ActivityLog() {
                     </button>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap mb-1">
-                        <span className="text-[11px] font-bold" style={{ color: ACTIVITY_COLORS[todo.stage as ActivityType] || '#6366f1' }}>
-                          {todo.stage || 'Task'}
+                        <span
+                          className="text-[11px] font-bold px-1.5 py-0.5 rounded"
+                          style={{ background: typeCfg.bg, color: typeCfg.color }}
+                        >
+                          {todo.type}
                         </span>
                         <span className={`text-xs font-semibold ${todo.done ? 'line-through' : ''}`}>{todo.lead_name}</span>
                         <span className="text-[10px] text-text-muted ml-auto">{todo.scheduled_time}</span>
                       </div>
                       <p className="text-xs text-text-secondary truncate">{todo.agenda}</p>
+                      {isAssigned && assignee && (
+                        <p className="text-[10px] text-amber-600 mt-1">
+                          <i className="fa-solid fa-user-plus mr-1"></i>
+                          Assigned by {teamMembers.find(m => m.id === todo.owner_id)?.name.split(' ')[0] || 'Manager'} to {assignee.name.split(' ')[0]}
+                        </p>
+                      )}
                     </div>
                     <button
                       onClick={() => handleDeleteTodo(todo.id)}
@@ -354,11 +399,15 @@ export function ActivityLog() {
                       <i className="fa-solid fa-xmark text-xs"></i>
                     </button>
                   </div>
-                ))}
+                );})}
                 {upcomingTodos.length > 0 && (
                   <>
                     <p className="text-[10px] font-bold text-text-muted uppercase tracking-wider my-3">Upcoming</p>
-                    {upcomingTodos.map(todo => (
+                    {upcomingTodos.map(todo => {
+                      const typeCfg = TYPE_CONFIG[todo.type as ActivityType] || TYPE_CONFIG['Call'];
+                      const isAssigned = todo.assigned_to && todo.assigned_to !== todo.owner_id;
+                      const assignee = isAssigned ? teamMembers.find(m => m.id === todo.assigned_to) : null;
+                      return (
                       <div
                         key={todo.id}
                         className="flex items-start gap-3 p-3 rounded-lg mb-2 border border-border bg-gray-50 dark:bg-gray-900/30"
@@ -369,16 +418,25 @@ export function ActivityLog() {
                         />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap mb-1">
-                            <span className="text-[11px] font-bold" style={{ color: ACTIVITY_COLORS[todo.stage as ActivityType] || '#6366f1' }}>
-                              {todo.stage || 'Task'}
+                            <span
+                              className="text-[11px] font-bold px-1.5 py-0.5 rounded"
+                              style={{ background: typeCfg.bg, color: typeCfg.color }}
+                            >
+                              {todo.type}
                             </span>
                             <span className="text-xs font-semibold">{todo.lead_name}</span>
                             <span className="text-[10px] text-text-muted ml-auto">{formatDate(todo.scheduled_date)}</span>
                           </div>
                           <p className="text-xs text-text-secondary truncate">{todo.agenda}</p>
+                          {isAssigned && assignee && (
+                            <p className="text-[10px] text-amber-600 mt-1">
+                              <i className="fa-solid fa-user-plus mr-1"></i>
+                              Assigned to {assignee.name.split(' ')[0]}
+                            </p>
+                          )}
                         </div>
                       </div>
-                    ))}
+                    );})}
                   </>
                 )}
               </>

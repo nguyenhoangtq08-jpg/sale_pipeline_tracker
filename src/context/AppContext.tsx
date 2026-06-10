@@ -1,16 +1,21 @@
 import { createContext, useContext, useState, useEffect, useCallback, useMemo, type ReactNode } from 'react';
-import type { Lead, Activity, User, Toast } from '../types';
+import type { Lead, Activity, User, Toast, ScheduledTodo, LeadRules, Notification } from '../types';
+import { ACCOUNTS } from '../types';
 
 interface AppState {
   currentUser: User | null;
   currentPage: string;
   leads: Lead[];
   activities: Activity[];
-  notifications: string[];
-  toast: Toast | null;
+  scheduledTodos: ScheduledTodo[];
+  leadRules: LeadRules;
+  notifications: Notification[];
+  toasts: Toast[];
   selectedLead: Lead | null;
   selectedActivity: Activity | null;
+  selectedMemberId: string | null;
   darkMode: boolean;
+  sidebarCollapsed: boolean;
   showAddLeadModal: boolean;
   showAddActivityModal: boolean;
   showProfileModal: boolean;
@@ -21,6 +26,8 @@ interface AppState {
   activityLogMode: 'log' | 'schedule';
   dealViewMode: 'kanban' | 'list';
   leadViewMode: 'kanban' | 'list';
+  teamMembers: typeof ACCOUNTS;
+  isAuthLoading: boolean;
 }
 
 type AppContextType = AppState & {
@@ -28,7 +35,7 @@ type AppContextType = AppState & {
   setCurrentPage: (page: string) => void;
   setLeads: (leads: Lead[]) => void;
   setActivities: (activities: Activity[]) => void;
-  setNotifications: (notifications: string[]) => void;
+  setNotifications: (notifications: Notification[]) => void;
   setToast: (toast: Toast | null) => void;
   setSelectedLead: (lead: Lead | null) => void;
   setSelectedActivity: (activity: Activity | null) => void;
@@ -43,18 +50,31 @@ type AppContextType = AppState & {
   setActivityLogMode: (mode: 'log' | 'schedule') => void;
   setDealViewMode: (mode: 'kanban' | 'list') => void;
   setLeadViewMode: (mode: 'kanban' | 'list') => void;
+  setSidebarCollapsed: (collapsed: boolean) => void;
+  setSelectedMemberId: (id: string | null) => void;
   addLead: (lead: Lead) => void;
   updateLead: (lead: Lead) => void;
   deleteLead: (id: string) => void;
   addActivity: (activity: Activity) => void;
   updateActivity: (activity: Activity) => void;
   deleteActivity: (id: string) => void;
+  addScheduledTodo: (todo: ScheduledTodo) => void;
+  updateScheduledTodo: (todo: ScheduledTodo) => void;
+  deleteScheduledTodo: (id: string) => void;
+  toggleTodoDone: (id: string) => void;
+  updateLeadRules: (rules: Partial<LeadRules>) => void;
   showToast: (message: string, type?: Toast['type']) => void;
+  showToastWithType: (type: Toast['type'], message: string) => void;
   hideToast: () => void;
+  dismissToast: (id: string) => void;
   logout: () => void;
   login: (user: User) => void;
+  signIn: (account: typeof ACCOUNTS[number]) => void;
+  signOut: () => void;
+  toggleDarkMode: () => void;
   getFilteredLeads: () => Lead[];
   getFilteredActivities: () => Activity[];
+  getFilteredScheduledTodos: () => ScheduledTodo[];
   getLeadById: (id: string) => Lead | undefined;
   getActivitiesForLead: (leadId: string) => Activity[];
   getTeamPerformance: () => { name: string; deals: number; revenue: number; winRate: number }[];
@@ -62,6 +82,8 @@ type AppContextType = AppState & {
   getRevenueByMonth: () => { month: string; value: number }[];
   getLeadSourceDistribution: () => { source: string; count: number }[];
   getTemperatureMatrix: () => { temperature: string; count: number; value: number }[];
+  markNotificationRead: (id: string) => void;
+  markAllNotificationsRead: () => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -72,9 +94,10 @@ const STORAGE_KEYS = {
   USER: 'salestrack_user',
   DARK_MODE: 'salestrack_dark_mode',
   NOTIFICATIONS: 'salestrack_notifications',
+  SCHEDULED: 'st_scheduled',
+  LEAD_RULES: 'st_lead_rules',
 };
 
-// Defensive localStorage read - returns null if anything fails
 function safeStorageGet(key: string): string | null {
   try {
     if (typeof window === 'undefined' || !window.localStorage) return null;
@@ -84,29 +107,22 @@ function safeStorageGet(key: string): string | null {
   }
 }
 
-// Defensive localStorage write
 function safeStorageSet(key: string, value: string): void {
   try {
     if (typeof window !== 'undefined' && window.localStorage) {
       window.localStorage.setItem(key, value);
     }
-  } catch {
-    // Silently fail if localStorage is unavailable
-  }
+  } catch {}
 }
 
-// Defensive localStorage remove
 function safeStorageRemove(key: string): void {
   try {
     if (typeof window !== 'undefined' && window.localStorage) {
       window.localStorage.removeItem(key);
     }
-  } catch {
-    // Silently fail
-  }
+  } catch {}
 }
 
-// Safe JSON parse with fallback
 function safeJsonParse<T>(json: string | null, fallback: T): T {
   if (!json) return fallback;
   try {
@@ -116,140 +132,60 @@ function safeJsonParse<T>(json: string | null, fallback: T): T {
   }
 }
 
-// Seed data for initial load
 function getSeedLeads(): Lead[] {
   return [
-    {
-      id: '1', name: 'TechCorp Vietnam', company: 'TechCorp Vietnam',
-      email: 'contact@techcorp.vn', phone: '+84-28-1234-5678',
-      source: 'Website', stage: 'Prospecting', temperature: 'Hot',
-      deal_size: 150000, probability: 25, assigned_to: '1',
-      last_contact: '2024-03-15', notes: 'Interested in enterprise package',
-      created_at: '2024-03-10T08:00:00Z', updated_at: '2024-03-15T14:30:00Z',
-    },
-    {
-      id: '2', name: 'Global Solutions Ltd', company: 'Global Solutions Ltd',
-      email: 'sales@globalsolutions.com', phone: '+1-555-0123',
-      source: 'Referral', stage: 'Qualification', temperature: 'Warm',
-      deal_size: 75000, probability: 40, assigned_to: '2',
-      last_contact: '2024-03-14', notes: 'Multi-location deployment needed',
-      created_at: '2024-03-08T10:00:00Z', updated_at: '2024-03-14T16:00:00Z',
-    },
-    {
-      id: '3', name: 'Innovation Hub', company: 'Innovation Hub',
-      email: 'procurement@innovationhub.io', phone: '+44-20-7946-0958',
-      source: 'Trade Show', stage: 'Proposal', temperature: 'Hot',
-      deal_size: 200000, probability: 60, assigned_to: '1',
-      last_contact: '2024-03-13', notes: 'Custom integration requirements',
-      created_at: '2024-03-05T09:00:00Z', updated_at: '2024-03-13T11:00:00Z',
-    },
-    {
-      id: '4', name: 'DataFlow Systems', company: 'DataFlow Systems',
-      email: 'info@dataflow.sys', phone: '+49-30-1234-5678',
-      source: 'LinkedIn', stage: 'Negotiation', temperature: 'Hot',
-      deal_size: 120000, probability: 80, assigned_to: '3',
-      last_contact: '2024-03-12', notes: 'Pricing negotiation in progress',
-      created_at: '2024-03-01T08:00:00Z', updated_at: '2024-03-12T15:00:00Z',
-    },
-    {
-      id: '5', name: 'Cloud Nine Inc', company: 'Cloud Nine Inc',
-      email: 'hello@cloudnine.com', phone: '+1-555-0456',
-      source: 'Cold Call', stage: 'Closed Won', temperature: 'Hot',
-      deal_size: 95000, probability: 100, assigned_to: '2',
-      last_contact: '2024-03-11', notes: 'Contract signed, implementation started',
-      created_at: '2024-02-20T10:00:00Z', updated_at: '2024-03-11T09:00:00Z',
-    },
-    {
-      id: '6', name: 'MegaCorp Industries', company: 'MegaCorp Industries',
-      email: 'business@megacorp.com', phone: '+81-3-1234-5678',
-      source: 'Website', stage: 'Closed Lost', temperature: 'Cold',
-      deal_size: 300000, probability: 0, assigned_to: '1',
-      last_contact: '2024-03-10', notes: 'Budget cut, postponed to Q3',
-      created_at: '2024-02-15T08:00:00Z', updated_at: '2024-03-10T14:00:00Z',
-    },
-    {
-      id: '7', name: 'StartupXYZ', company: 'StartupXYZ',
-      email: 'founders@startupxyz.io', phone: '+1-555-0789',
-      source: 'Referral', stage: 'Prospecting', temperature: 'Warm',
-      deal_size: 45000, probability: 15, assigned_to: '3',
-      last_contact: '2024-03-09', notes: 'Early stage, needs nurturing',
-      created_at: '2024-03-08T11:00:00Z', updated_at: '2024-03-09T10:00:00Z',
-    },
-    {
-      id: '8', name: 'Enterprise Solutions', company: 'Enterprise Solutions',
-      email: 'sales@enterprise.sol', phone: '+33-1-23-45-67-89',
-      source: 'Trade Show', stage: 'Qualification', temperature: 'Cold',
-      deal_size: 180000, probability: 30, assigned_to: '2',
-      last_contact: '2024-03-08', notes: 'Evaluating multiple vendors',
-      created_at: '2024-03-01T09:00:00Z', updated_at: '2024-03-08T16:00:00Z',
-    },
+    { id: 'lead_1', name: 'Nguyễn Thị Linh', company: 'TechCorp Vietnam', email: 'linh@techcorp.vn', phone: '0901234567', deal_size: 32000, source: 'Website', stage: 'Proposal', probability: 50, notes: 'Interested in enterprise package', owner_id: '1', created_at: '2026-03-15T08:00:00Z', updated_at: '2026-05-20T10:00:00Z' },
+    { id: 'lead_2', name: 'Trần Minh Đức', company: 'ABC Manufacturing', email: 'duc@abcmfg.vn', phone: '0912345678', deal_size: 45000, source: 'Referral', stage: 'Negotiation', probability: 75, notes: 'Budget approved, finalizing terms', owner_id: '1', created_at: '2026-02-10T09:00:00Z', updated_at: '2026-05-25T14:00:00Z' },
+    { id: 'lead_3', name: 'Phạm Thị Hoa', company: 'XYZ Retail Group', email: 'hoa@xyz.vn', phone: '0923456789', deal_size: 18500, source: 'Event', stage: 'Qualification', probability: 25, notes: 'Met at Vietnam Tech Summit', owner_id: '2', created_at: '2026-04-01T10:00:00Z', updated_at: '2026-05-10T09:00:00Z' },
+    { id: 'lead_4', name: 'Lê Văn Nam', company: 'StartupVN', email: 'nam@startupvn.vn', phone: '0934567890', deal_size: 78000, source: 'Cold Call', stage: 'Prospecting', probability: 10, notes: 'CEO, very busy schedule', owner_id: '3', created_at: '2026-05-01T11:00:00Z', updated_at: '2026-05-01T11:00:00Z' },
+    { id: 'lead_5', name: 'Võ Thị Mai', company: 'Global Logistics Co', email: 'mai@global.vn', phone: '0945678901', deal_size: 55000, source: 'Website', stage: 'Closed Won', probability: 100, notes: 'Contract signed April 2026', owner_id: '2', created_at: '2026-01-15T08:00:00Z', updated_at: '2026-04-30T16:00:00Z' },
+    { id: 'lead_6', name: 'Đặng Quốc Hùng', company: 'Saigon Food JSC', email: 'hung@saigon.vn', phone: '0956789012', deal_size: 28000, source: 'Referral', stage: 'Closed Won', probability: 100, notes: 'Upsell opportunity Q3', owner_id: '3', created_at: '2026-02-20T09:00:00Z', updated_at: '2026-05-15T11:00:00Z' },
+    { id: 'lead_7', name: 'Bùi Thị Lan', company: 'MedTech Solutions', email: 'lan@medtech.vn', phone: '0967890123', deal_size: 92000, source: 'Event', stage: 'Proposal', probability: 50, notes: 'Needs board approval', owner_id: '1', created_at: '2026-04-10T10:00:00Z', updated_at: '2026-05-28T13:00:00Z' },
+    { id: 'lead_8', name: 'Hoàng Văn Tùng', company: 'EduSmart Vietnam', email: 'tung@edusmart.vn', phone: '0978901234', deal_size: 15000, source: 'Website', stage: 'Closed Lost', probability: 0, notes: 'Chose competitor on price', owner_id: '2', created_at: '2026-03-05T08:00:00Z', updated_at: '2026-04-20T10:00:00Z' }
   ];
 }
 
 function getSeedActivities(): Activity[] {
   return [
-    {
-      id: '1', lead_id: '1', lead_name: 'TechCorp Vietnam', type: 'Call',
-      notes: 'Initial discovery call. They are interested in our enterprise package.',
-      date: '2024-03-15T14:00:00Z', created_at: '2024-03-15T14:30:00Z',
-      owner_id: '1', company: 'TechCorp Vietnam', stage: 'Prospecting',
-    },
-    {
-      id: '2', lead_id: '2', lead_name: 'Global Solutions Ltd', type: 'Email',
-      notes: 'Sent product brochure and pricing information.',
-      date: '2024-03-14T10:00:00Z', created_at: '2024-03-14T10:30:00Z',
-      owner_id: '2', company: 'Global Solutions Ltd', stage: 'Qualification',
-    },
-    {
-      id: '3', lead_id: '3', lead_name: 'Innovation Hub', type: 'Meeting',
-      notes: 'Technical demo went well. Custom integration discussion.',
-      date: '2024-03-13T11:00:00Z', created_at: '2024-03-13T11:30:00Z',
-      owner_id: '1', company: 'Innovation Hub', stage: 'Proposal',
-    },
-    {
-      id: '4', lead_id: '4', lead_name: 'DataFlow Systems', type: 'Call',
-      notes: 'Pricing negotiation. They want a 15% discount.',
-      date: '2024-03-12T15:00:00Z', created_at: '2024-03-12T15:30:00Z',
-      owner_id: '3', company: 'DataFlow Systems', stage: 'Negotiation',
-    },
-    {
-      id: '5', lead_id: '5', lead_name: 'Cloud Nine Inc', type: 'Meeting',
-      notes: 'Contract signing ceremony. Deal closed!',
-      date: '2024-03-11T09:00:00Z', created_at: '2024-03-11T09:30:00Z',
-      owner_id: '2', company: 'Cloud Nine Inc', stage: 'Closed Won',
-    },
-    {
-      id: '6', lead_id: '1', lead_name: 'TechCorp Vietnam', type: 'Email',
-      notes: 'Follow-up email with case studies.',
-      date: '2024-03-16T09:00:00Z', created_at: '2024-03-15T16:00:00Z',
-      owner_id: '1', company: 'TechCorp Vietnam', stage: 'Prospecting',
-    },
-    {
-      id: '7', lead_id: '3', lead_name: 'Innovation Hub', type: 'Call',
-      notes: 'Technical requirements clarification call.',
-      date: '2024-03-17T14:00:00Z', created_at: '2024-03-13T12:00:00Z',
-      owner_id: '1', company: 'Innovation Hub', stage: 'Proposal',
-    },
-    {
-      id: '8', lead_id: '6', lead_name: 'MegaCorp Industries', type: 'Meeting',
-      notes: 'Budget discussion - they had a budget cut.',
-      date: '2024-03-10T14:00:00Z', created_at: '2024-03-10T14:30:00Z',
-      owner_id: '1', company: 'MegaCorp Industries', stage: 'Closed Lost',
-    },
+    { id: 'act_1', type: 'Call', lead_id: 'lead_1', lead_name: 'Nguyễn Thị Linh', company: 'TechCorp Vietnam', stage: 'Proposal', date: '2026-05-20T10:00:00Z', duration: 30, notes: 'Discussed enterprise pricing. Client comparing with 2 competitors.', next_action: 'Send comparison doc by Friday', owner_id: '1', created_at: '2026-05-20T10:30:00Z' },
+    { id: 'act_2', type: 'Email', lead_id: 'lead_2', lead_name: 'Trần Minh Đức', company: 'ABC Manufacturing', stage: 'Negotiation', date: '2026-05-25T14:00:00Z', duration: 0, notes: 'Sent revised proposal with 5% discount. Awaiting response.', next_action: 'Follow up if no reply by Wed', owner_id: '1', created_at: '2026-05-25T14:15:00Z' },
+    { id: 'act_3', type: 'Meeting', lead_id: 'lead_3', lead_name: 'Phạm Thị Hoa', company: 'XYZ Retail Group', stage: 'Qualification', date: '2026-05-10T09:00:00Z', duration: 60, notes: 'Product demo. Very positive. Needs CFO approval.', next_action: 'Schedule CFO intro call', owner_id: '2', created_at: '2026-05-10T10:05:00Z' },
+    { id: 'act_4', type: 'Call', lead_id: 'lead_4', lead_name: 'Lê Văn Nam', company: 'StartupVN', stage: 'Prospecting', date: '2026-05-01T11:00:00Z', duration: 15, notes: 'Brief intro. Interested but busy. Follow up next month.', next_action: 'Call again June 15', owner_id: '3', created_at: '2026-05-01T11:20:00Z' },
+    { id: 'act_5', type: 'Meeting', lead_id: 'lead_7', lead_name: 'Bùi Thị Lan', company: 'MedTech Solutions', stage: 'Proposal', date: '2026-05-28T13:00:00Z', duration: 90, notes: 'Presented full solution to management. Strong interest from IT.', next_action: 'Send board deck', owner_id: '1', created_at: '2026-05-28T14:35:00Z' },
+    { id: 'act_6', type: 'Email', lead_id: 'lead_1', lead_name: 'Nguyễn Thị Linh', company: 'TechCorp Vietnam', stage: 'Proposal', date: '2026-05-22T09:00:00Z', duration: 0, notes: 'Sent comparison document highlighting key advantages.', next_action: null, owner_id: '1', created_at: '2026-05-22T09:10:00Z' },
+    { id: 'act_7', type: 'Note', lead_id: 'lead_2', lead_name: 'Trần Minh Đức', company: 'ABC Manufacturing', stage: 'Negotiation', date: '2026-05-26T16:00:00Z', duration: 0, notes: 'Legal reviewing contract. Competitor also submitted proposal.', next_action: 'Check status Monday', owner_id: '1', created_at: '2026-05-26T16:05:00Z' },
+    { id: 'act_8', type: 'Call', lead_id: 'lead_5', lead_name: 'Võ Thị Mai', company: 'Global Logistics Co', stage: 'Closed Won', date: '2026-04-28T10:00:00Z', duration: 20, notes: 'Final confirmation call. All terms agreed.', next_action: null, owner_id: '2', created_at: '2026-04-28T10:25:00Z' },
+    { id: 'act_9', type: 'Email', lead_id: 'lead_7', lead_name: 'Bùi Thị Lan', company: 'MedTech Solutions', stage: 'Proposal', date: '2026-05-30T08:00:00Z', duration: 0, notes: 'Sent 12-slide board deck with ROI analysis.', next_action: 'Follow up after board meeting', owner_id: '1', created_at: '2026-05-30T08:15:00Z' },
+    { id: 'act_10', type: 'Meeting', lead_id: 'lead_6', lead_name: 'Đặng Quốc Hùng', company: 'Saigon Food JSC', stage: 'Closed Won', date: '2026-05-15T11:00:00Z', duration: 45, notes: 'Post-sale check-in. Very satisfied. Discussed Q3 upsell.', next_action: 'Prepare Q3 upsell proposal', owner_id: '3', created_at: '2026-05-15T11:50:00Z' }
   ];
 }
 
-function getSeedNotifications(): string[] {
+function getSeedScheduledTodos(): ScheduledTodo[] {
+  const today = new Date().toISOString().split('T')[0];
+  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+  const dayAfter3 = new Date(); dayAfter3.setDate(dayAfter3.getDate() + 3);
   return [
-    'New lead assigned: TechCorp Vietnam',
-    'Deal won: Cloud Nine Inc - $95,000',
-    'Meeting scheduled with Innovation Hub',
-    'Follow-up required: Global Solutions Ltd',
-    'Pipeline alert: 3 deals in negotiation',
+    { id: 'sched_1', type: 'Call', lead_id: 'lead_1', lead_name: 'Nguyễn Thị Linh', company: 'TechCorp Vietnam', stage: 'Proposal', scheduled_date: today, scheduled_time: '10:00', agenda: 'Follow up on enterprise pricing comparison doc. Ask about timeline.', done: false, owner_id: '1', assigned_to: '1', created_at: new Date().toISOString() },
+    { id: 'sched_2', type: 'Meeting', lead_id: 'lead_3', lead_name: 'Phạm Thị Hoa', company: 'XYZ Retail Group', stage: 'Qualification', scheduled_date: today, scheduled_time: '14:30', agenda: 'CFO intro call. Present ROI numbers. Keep under 30 mins.', done: true, owner_id: '2', assigned_to: '2', created_at: new Date().toISOString() },
+    { id: 'sched_3', type: 'Email', lead_id: 'lead_2', lead_name: 'Trần Minh Đức', company: 'ABC Manufacturing', stage: 'Negotiation', scheduled_date: tomorrow.toISOString().split('T')[0], scheduled_time: '09:00', agenda: 'Check on contract review status. Offer to address any legal concerns.', done: false, owner_id: '1', assigned_to: '1', created_at: new Date().toISOString() },
+    { id: 'sched_4', type: 'Call', lead_id: 'lead_4', lead_name: 'Lê Văn Nam', company: 'StartupVN', stage: 'Prospecting', scheduled_date: tomorrow.toISOString().split('T')[0], scheduled_time: '11:00', agenda: 'June 15 follow-up call. Pitch enterprise tier. [Assigned by Anna]', done: false, owner_id: '0', assigned_to: '3', created_at: new Date().toISOString() },
+    { id: 'sched_5', type: 'Meeting', lead_id: 'lead_7', lead_name: 'Bùi Thị Lan', company: 'MedTech Solutions', stage: 'Proposal', scheduled_date: dayAfter3.toISOString().split('T')[0], scheduled_time: '15:00', agenda: 'Board deck debrief. Find out feedback. [Assigned by Anna]', done: false, owner_id: '0', assigned_to: '1', created_at: new Date().toISOString() }
   ];
 }
 
-// Load leads with fallback to seed data
+function getSeedLeadRules(): LeadRules {
+  return { id: '1', warm_days: 7, cold_days: 14, updated_at: new Date().toISOString(), updated_by: null };
+}
+
+function getSeedNotifications(): Notification[] {
+  return [
+    { id: '1', title: 'New lead assigned', message: 'Nguyễn Thị Linh from TechCorp has been assigned to you', time: '2 hours ago', read: false, type: 'lead' },
+    { id: '2', title: 'Deal stage updated', message: 'ABC Manufacturing moved to Negotiation stage', time: '5 hours ago', read: false, type: 'deal' },
+    { id: '3', title: 'Weekly report ready', message: 'Your weekly pipeline report for May 26–June 1 is available', time: '1 day ago', read: true, type: 'system' },
+    { id: '4', title: 'Follow-up reminder', message: 'Scheduled call with Lê Văn Nam tomorrow at 10:00 AM', time: '2 days ago', read: true, type: 'activity' }
+  ];
+}
+
 function loadLeads(): Lead[] {
   const stored = safeStorageGet(STORAGE_KEYS.LEADS);
   if (stored) {
@@ -261,19 +197,49 @@ function loadLeads(): Lead[] {
   return seed;
 }
 
-// Load activities with fallback to seed data
 function loadActivities(): Activity[] {
-  const stored = safeStorageGet(STORAGE_KEYS.ACTIVITYS);
+  const stored = safeStorageGet(STORAGE_KEYS.ACTS);
   if (stored) {
     const parsed = safeJsonParse<Activity[]>(stored, []);
     if (Array.isArray(parsed) && parsed.length > 0) return parsed;
   }
   const seed = getSeedActivities();
-  safeStorageSet(STORAGE_KEYS.ACTIVITYS, JSON.stringify(seed));
+  safeStorageSet(STORAGE_KEYS.ACTS, JSON.stringify(seed));
   return seed;
 }
 
-// Load user with fallback
+function loadScheduledTodos(): ScheduledTodo[] {
+  const stored = safeStorageGet(STORAGE_KEYS.SCHEDULED);
+  if (stored) {
+    const parsed = safeJsonParse<ScheduledTodo[]>(stored, []);
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+  }
+  const seed = getSeedScheduledTodos();
+  safeStorageSet(STORAGE_KEYS.SCHEDULED, JSON.stringify(seed));
+  return seed;
+}
+
+function loadLeadRules(): LeadRules {
+  const stored = safeStorageGet(STORAGE_KEYS.LEAD_RULES);
+  if (stored) {
+    return safeJsonParse<LeadRules>(stored, getSeedLeadRules());
+  }
+  const seed = getSeedLeadRules();
+  safeStorageSet(STORAGE_KEYS.LEAD_RULES, JSON.stringify(seed));
+  return seed;
+}
+
+function loadNotifications(): Notification[] {
+  const stored = safeStorageGet(STORAGE_KEYS.NOTIFICATIONS);
+  if (stored) {
+    const parsed = safeJsonParse<Notification[]>(stored, []);
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+  }
+  const seed = getSeedNotifications();
+  safeStorageSet(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(seed));
+  return seed;
+}
+
 function loadUser(): User | null {
   const stored = safeStorageGet(STORAGE_KEYS.USER);
   if (stored) {
@@ -282,7 +248,6 @@ function loadUser(): User | null {
   return null;
 }
 
-// Load dark mode
 function loadDarkMode(): boolean {
   const stored = safeStorageGet(STORAGE_KEYS.DARK_MODE);
   if (stored) {
@@ -291,28 +256,20 @@ function loadDarkMode(): boolean {
   return false;
 }
 
-// Load notifications
-function loadNotifications(): string[] {
-  const stored = safeStorageGet(STORAGE_KEYS.NOTIFICATIONS);
-  if (stored) {
-    const parsed = safeJsonParse<string[]>(stored, []);
-    if (Array.isArray(parsed)) return parsed;
-  }
-  const seed = getSeedNotifications();
-  safeStorageSet(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(seed));
-  return seed;
-}
-
 export function AppProvider({ children }: { children: ReactNode }) {
   const [currentUser, setCurrentUser] = useState<User | null>(loadUser);
   const [currentPage, setCurrentPage] = useState('dashboard');
   const [leads, setLeadsState] = useState<Lead[]>(loadLeads);
   const [activities, setActivitiesState] = useState<Activity[]>(loadActivities);
-  const [notifications, setNotificationsState] = useState<string[]>(loadNotifications);
-  const [toast, setToast] = useState<Toast | null>(null);
+  const [scheduledTodos, setScheduledTodosState] = useState<ScheduledTodo[]>(loadScheduledTodos);
+  const [leadRules, setLeadRulesState] = useState<LeadRules>(loadLeadRules);
+  const [notifications, setNotificationsState] = useState<Notification[]>(loadNotifications);
+  const [toasts, setToasts] = useState<Toast[]>([]);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [selectedActivity, setSelectedActivity] = useState<Activity | null>(null);
+  const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [darkMode, setDarkModeState] = useState(loadDarkMode);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showAddLeadModal, setShowAddLeadModal] = useState(false);
   const [showAddActivityModal, setShowAddActivityModal] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
@@ -323,18 +280,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [activityLogMode, setActivityLogMode] = useState<'log' | 'schedule'>('log');
   const [dealViewMode, setDealViewMode] = useState<'kanban' | 'list'>('kanban');
   const [leadViewMode, setLeadViewMode] = useState<'kanban' | 'list'>('kanban');
+  const [isAuthLoading, setIsAuthLoading] = useState(false);
 
-  // Persist leads
-  useEffect(() => {
-    safeStorageSet(STORAGE_KEYS.LEADS, JSON.stringify(leads));
-  }, [leads]);
-
-  // Persist activities
-  useEffect(() => {
-    safeStorageSet(STORAGE_KEYS.ACTIVITYS, JSON.stringify(activities));
-  }, [activities]);
-
-  // Persist user
+  useEffect(() => { safeStorageSet(STORAGE_KEYS.LEADS, JSON.stringify(leads)); }, [leads]);
+  useEffect(() => { safeStorageSet(STORAGE_KEYS.ACTS, JSON.stringify(activities)); }, [activities]);
+  useEffect(() => { safeStorageSet(STORAGE_KEYS.SCHEDULED, JSON.stringify(scheduledTodos)); }, [scheduledTodos]);
+  useEffect(() => { safeStorageSet(STORAGE_KEYS.LEAD_RULES, JSON.stringify(leadRules)); }, [leadRules]);
+  useEffect(() => { safeStorageSet(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(notifications)); }, [notifications]);
   useEffect(() => {
     if (currentUser) {
       safeStorageSet(STORAGE_KEYS.USER, JSON.stringify(currentUser));
@@ -342,8 +294,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       safeStorageRemove(STORAGE_KEYS.USER);
     }
   }, [currentUser]);
-
-  // Persist dark mode
   useEffect(() => {
     safeStorageSet(STORAGE_KEYS.DARK_MODE, JSON.stringify(darkMode));
     if (darkMode) {
@@ -353,42 +303,76 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [darkMode]);
 
-  // Persist notifications
-  useEffect(() => {
-    safeStorageSet(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(notifications));
-  }, [notifications]);
-
-  const showToastFn = useCallback((message: string, type: Toast['type'] = 'info') => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 3000);
+  const showToast = useCallback((message: string, type: Toast['type'] = 'info') => {
+    const id = Date.now().toString();
+    setToasts(prev => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 3000);
   }, []);
 
-  const hideToast = useCallback(() => setToast(null), []);
+  const showToastWithType = useCallback((type: Toast['type'], message: string) => {
+    showToast(message, type);
+  }, [showToast]);
 
-  const logout = useCallback(() => {
+  const dismissToast = useCallback((id: string) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  }, []);
+
+  const hideToast = useCallback(() => {
+    setToasts([]);
+  }, []);
+
+  const signIn = useCallback((account: typeof ACCOUNTS[number]) => {
+    setIsAuthLoading(true);
+    setTimeout(() => {
+      const user: User = {
+        id: account.id,
+        name: account.name,
+        initials: account.initials,
+        email: account.email,
+        role: account.role,
+        color: account.color,
+        roleLabel: account.roleLabel,
+      };
+      setCurrentUser(user);
+      setIsAuthLoading(false);
+    }, 500);
+  }, []);
+
+  const signOut = useCallback(() => {
     setCurrentUser(null);
     safeStorageRemove(STORAGE_KEYS.USER);
   }, []);
 
-  const login = useCallback((user: User) => {
-    setCurrentUser(user);
+  const toggleDarkMode = useCallback(() => {
+    setDarkModeState(prev => !prev);
   }, []);
 
-  // Defensive: always return array, never crash on empty/null
+  const isManager = useCallback(() => currentUser?.role === 'manager', [currentUser]);
+
+  // Scope helpers - filter by current user if member
   const getFilteredLeads = useCallback((): Lead[] => {
     if (!Array.isArray(leads)) return [];
     if (!currentUser) return [];
-    if (currentUser.role === 'manager') return leads;
-    return leads.filter(l => l && l.assigned_to === currentUser.id);
+    if (isManager()) return leads;
+    return leads.filter(l => l && l.owner_id === currentUser.id);
   }, [leads, currentUser]);
 
-  // Defensive: always return array
   const getFilteredActivities = useCallback((): Activity[] => {
     if (!Array.isArray(activities)) return [];
     if (!currentUser) return [];
-    if (currentUser.role === 'manager') return activities;
+    if (isManager()) return activities;
     return activities.filter(a => a && a.owner_id === currentUser.id);
   }, [activities, currentUser]);
+
+  const getFilteredScheduledTodos = useCallback((): ScheduledTodo[] => {
+    if (!Array.isArray(scheduledTodos)) return [];
+    if (!currentUser) return [];
+    if (isManager()) return scheduledTodos;
+    // Member sees: todos they created (owner_id) OR todos assigned to them (assigned_to)
+    return scheduledTodos.filter(s => s.owner_id === currentUser.id || s.assigned_to === currentUser.id);
+  }, [scheduledTodos, currentUser]);
 
   const getLeadById = useCallback((id: string): Lead | undefined => {
     if (!Array.isArray(leads) || !id) return undefined;
@@ -401,52 +385,58 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [activities]);
 
   const addLead = useCallback((lead: Lead) => {
-    setLeadsState(prev => {
-      const safePrev = Array.isArray(prev) ? prev : [];
-      return [...safePrev, lead];
-    });
+    setLeadsState(prev => [...(Array.isArray(prev) ? prev : []), lead]);
   }, []);
 
   const updateLead = useCallback((updatedLead: Lead) => {
-    setLeadsState(prev => {
-      const safePrev = Array.isArray(prev) ? prev : [];
-      return safePrev.map(l => (l && l.id === updatedLead.id ? updatedLead : l));
-    });
+    setLeadsState(prev => (Array.isArray(prev) ? prev : []).map(l => l?.id === updatedLead.id ? updatedLead : l));
   }, []);
 
   const deleteLead = useCallback((id: string) => {
-    setLeadsState(prev => {
-      const safePrev = Array.isArray(prev) ? prev : [];
-      return safePrev.filter(l => l && l.id !== id);
-    });
-    setActivitiesState(prev => {
-      const safePrev = Array.isArray(prev) ? prev : [];
-      return safePrev.filter(a => a && a.lead_id !== id);
-    });
+    setLeadsState(prev => (Array.isArray(prev) ? prev : []).filter(l => l?.id !== id));
+    setActivitiesState(prev => (Array.isArray(prev) ? prev : []).filter(a => a?.lead_id !== id));
   }, []);
 
   const addActivity = useCallback((activity: Activity) => {
-    setActivitiesState(prev => {
-      const safePrev = Array.isArray(prev) ? prev : [];
-      return [...safePrev, activity];
-    });
+    setActivitiesState(prev => [...(Array.isArray(prev) ? prev : []), activity]);
   }, []);
 
   const updateActivity = useCallback((updatedActivity: Activity) => {
-    setActivitiesState(prev => {
-      const safePrev = Array.isArray(prev) ? prev : [];
-      return safePrev.map(a => (a && a.id === updatedActivity.id ? updatedActivity : a));
-    });
+    setActivitiesState(prev => (Array.isArray(prev) ? prev : []).map(a => a?.id === updatedActivity.id ? updatedActivity : a));
   }, []);
 
   const deleteActivity = useCallback((id: string) => {
-    setActivitiesState(prev => {
-      const safePrev = Array.isArray(prev) ? prev : [];
-      return safePrev.filter(a => a && a.id !== id);
-    });
+    setActivitiesState(prev => (Array.isArray(prev) ? prev : []).filter(a => a?.id !== id));
   }, []);
 
-  // Defensive team performance
+  const addScheduledTodo = useCallback((todo: ScheduledTodo) => {
+    setScheduledTodosState(prev => [...(Array.isArray(prev) ? prev : []), todo]);
+  }, []);
+
+  const updateScheduledTodo = useCallback((updatedTodo: ScheduledTodo) => {
+    setScheduledTodosState(prev => (Array.isArray(prev) ? prev : []).map(s => s?.id === updatedTodo.id ? updatedTodo : s));
+  }, []);
+
+  const deleteScheduledTodo = useCallback((id: string) => {
+    setScheduledTodosState(prev => (Array.isArray(prev) ? prev : []).filter(s => s?.id !== id));
+  }, []);
+
+  const toggleTodoDone = useCallback((id: string) => {
+    setScheduledTodosState(prev => (Array.isArray(prev) ? prev : []).map(s => s?.id === id ? { ...s, done: !s.done } : s));
+  }, []);
+
+  const updateLeadRules = useCallback((rules: Partial<LeadRules>) => {
+    setLeadRulesState(prev => ({ ...prev, ...rules, updated_at: new Date().toISOString(), updated_by: currentUser?.id || null }));
+  }, [currentUser]);
+
+  const markNotificationRead = useCallback((id: string) => {
+    setNotificationsState(prev => (Array.isArray(prev) ? prev : []).map(n => n?.id === id ? { ...n, read: true } : n));
+  }, []);
+
+  const markAllNotificationsRead = useCallback(() => {
+    setNotificationsState(prev => (Array.isArray(prev) ? prev : []).map(n => ({ ...n, read: true })));
+  }, []);
+
   const getTeamPerformance = useCallback(() => {
     const safeLeads = Array.isArray(leads) ? leads : [];
     const teamMembers = [
@@ -455,8 +445,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       { id: '3', name: 'Hung Vo' },
     ];
     return teamMembers.map(member => {
-      const memberLeads = safeLeads.filter(l => l && l.assigned_to === member.id);
-      const won = memberLeads.filter(l => l && l.stage === 'Closed Won');
+      const memberLeads = safeLeads.filter(l => l && l.owner_id === member.id);
+      const won = memberLeads.filter(l => l?.stage === 'Closed Won');
       const total = memberLeads.filter(l => l && ['Closed Won', 'Closed Lost'].includes(l.stage));
       const revenue = won.reduce((sum, l) => sum + (Number(l.deal_size) || 0), 0);
       const winRate = total.length > 0 ? (won.length / total.length) * 100 : 0;
@@ -464,60 +454,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   }, [leads]);
 
-  // Defensive pipeline data
   const getPipelineData = useCallback(() => {
     const safeLeads = Array.isArray(leads) ? leads : [];
     const stages = ['Prospecting', 'Qualification', 'Proposal', 'Negotiation', 'Closed Won', 'Closed Lost'];
     return stages.map(stage => {
-      const stageLeads = safeLeads.filter(l => l && l.stage === stage);
-      return {
-        stage,
-        count: stageLeads.length,
-        value: stageLeads.reduce((sum, l) => sum + (Number(l.deal_size) || 0), 0),
-      };
+      const stageLeads = safeLeads.filter(l => l?.stage === stage);
+      return { stage, count: stageLeads.length, value: stageLeads.reduce((sum, l) => sum + (Number(l.deal_size) || 0), 0) };
     });
   }, [leads]);
 
-  // Defensive revenue by month
   const getRevenueByMonth = useCallback(() => {
     const safeLeads = Array.isArray(leads) ? leads : [];
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'];
-    return months.map(month => {
-      const monthLeads = safeLeads.filter(l => {
-        if (!l || !l.updated_at) return false;
-        try {
-          return l.updated_at.includes(`2024-${months.indexOf(month) + 1}-`) && l.stage === 'Closed Won';
-        } catch {
-          return false;
-        }
-      });
+    return months.map((month, idx) => {
+      const monthLeads = safeLeads.filter(l => l?.updated_at && l.updated_at.includes(`2024-${idx + 1}-`) && l.stage === 'Closed Won');
       return { month, value: monthLeads.reduce((sum, l) => sum + (Number(l.deal_size) || 0), 0) };
     });
   }, [leads]);
 
-  // Defensive lead source distribution
   const getLeadSourceDistribution = useCallback(() => {
     const safeLeads = Array.isArray(leads) ? leads : [];
     const sources: Record<string, number> = {};
-    safeLeads.forEach(l => {
-      if (l && l.source) {
-        sources[l.source] = (sources[l.source] || 0) + 1;
-      }
-    });
+    safeLeads.forEach(l => { if (l?.source) sources[l.source] = (sources[l.source] || 0) + 1; });
     return Object.entries(sources).map(([source, count]) => ({ source, count }));
   }, [leads]);
 
-  // Defensive temperature matrix
   const getTemperatureMatrix = useCallback(() => {
     const safeLeads = Array.isArray(leads) ? leads : [];
     const temps = ['Hot', 'Warm', 'Cold'];
     return temps.map(temperature => {
-      const tempLeads = safeLeads.filter(l => l && l.temperature === temperature);
-      return {
-        temperature,
-        count: tempLeads.length,
-        value: tempLeads.reduce((sum, l) => sum + (Number(l.deal_size) || 0), 0),
-      };
+      const tempLeads = safeLeads.filter(l => l?.stage === temperature);
+      return { temperature, count: tempLeads.length, value: tempLeads.reduce((sum, l) => sum + (Number(l.deal_size) || 0), 0) };
     });
   }, [leads]);
 
@@ -529,7 +496,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setActivitiesState(Array.isArray(newActivities) ? newActivities : []);
   }, []);
 
-  const setNotifications = useCallback((newNotifications: string[]) => {
+  const setNotifications = useCallback((newNotifications: Notification[]) => {
     setNotificationsState(Array.isArray(newNotifications) ? newNotifications : []);
   }, []);
 
@@ -538,30 +505,40 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo(() => ({
-    currentUser, currentPage, leads, activities, notifications, toast,
-    selectedLead, selectedActivity, darkMode, showAddLeadModal, showAddActivityModal,
-    showProfileModal, showSettingsModal, showNotificationsModal, showLeadRulesModal,
-    showAddDealModal, activityLogMode, dealViewMode, leadViewMode,
+    currentUser, currentPage, leads, activities, scheduledTodos, leadRules, notifications, toasts,
+    selectedLead, selectedActivity, selectedMemberId, darkMode, sidebarCollapsed,
+    showAddLeadModal, showAddActivityModal, showProfileModal, showSettingsModal,
+    showNotificationsModal, showLeadRulesModal, showAddDealModal,
+    activityLogMode, dealViewMode, leadViewMode, teamMembers: ACCOUNTS, isAuthLoading,
     setCurrentUser, setCurrentPage, setLeads, setActivities, setNotifications,
-    setToast, setSelectedLead, setSelectedActivity, setDarkMode,
+    setToast: () => {}, setSelectedLead, setSelectedActivity, setDarkMode,
     setShowAddLeadModal, setShowAddActivityModal, setShowProfileModal,
     setShowSettingsModal, setShowNotificationsModal, setShowLeadRulesModal,
     setShowAddDealModal, setActivityLogMode, setDealViewMode, setLeadViewMode,
+    setSidebarCollapsed, setSelectedMemberId,
     addLead, updateLead, deleteLead, addActivity, updateActivity, deleteActivity,
-    showToast: showToastFn, hideToast, logout, login,
-    getFilteredLeads, getFilteredActivities, getLeadById, getActivitiesForLead,
-    getTeamPerformance, getPipelineData, getRevenueByMonth, getLeadSourceDistribution,
-    getTemperatureMatrix,
+    addScheduledTodo, updateScheduledTodo, deleteScheduledTodo, toggleTodoDone,
+    updateLeadRules, showToast, showToastWithType, hideToast, dismissToast,
+    signOut, signIn, toggleDarkMode,
+    getFilteredLeads, getFilteredActivities, getFilteredScheduledTodos,
+    getLeadById, getActivitiesForLead,
+    getTeamPerformance, getPipelineData, getRevenueByMonth, getLeadSourceDistribution, getTemperatureMatrix,
+    markNotificationRead, markAllNotificationsRead,
+    logout: signOut, login: (user: User) => setCurrentUser(user),
   }), [
-    currentUser, currentPage, leads, activities, notifications, toast,
-    selectedLead, selectedActivity, darkMode, showAddLeadModal, showAddActivityModal,
-    showProfileModal, showSettingsModal, showNotificationsModal, showLeadRulesModal,
-    showAddDealModal, activityLogMode, dealViewMode, leadViewMode,
-    showToastFn, hideToast, logout, login,
+    currentUser, currentPage, leads, activities, scheduledTodos, leadRules, notifications, toasts,
+    selectedLead, selectedActivity, selectedMemberId, darkMode, sidebarCollapsed,
+    showAddLeadModal, showAddActivityModal, showProfileModal, showSettingsModal,
+    showNotificationsModal, showLeadRulesModal, showAddDealModal,
+    activityLogMode, dealViewMode, leadViewMode, isAuthLoading,
     addLead, updateLead, deleteLead, addActivity, updateActivity, deleteActivity,
-    getFilteredLeads, getFilteredActivities, getLeadById, getActivitiesForLead,
-    getTeamPerformance, getPipelineData, getRevenueByMonth, getLeadSourceDistribution,
-    getTemperatureMatrix,
+    addScheduledTodo, updateScheduledTodo, deleteScheduledTodo, toggleTodoDone,
+    updateLeadRules, showToast, showToastWithType, hideToast, dismissToast,
+    signOut, signIn, toggleDarkMode,
+    getFilteredLeads, getFilteredActivities, getFilteredScheduledTodos,
+    getLeadById, getActivitiesForLead,
+    getTeamPerformance, getPipelineData, getRevenueByMonth, getLeadSourceDistribution, getTemperatureMatrix,
+    markNotificationRead, markAllNotificationsRead,
   ]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
@@ -574,9 +551,10 @@ export function useApp() {
 }
 
 export function useFilteredData() {
-  const { getFilteredLeads, getFilteredActivities } = useApp();
+  const { getFilteredLeads, getFilteredActivities, getFilteredScheduledTodos } = useApp();
   return useMemo(() => ({
     leads: getFilteredLeads(),
     activities: getFilteredActivities(),
-  }), [getFilteredLeads, getFilteredActivities]);
+    scheduledTodos: getFilteredScheduledTodos(),
+  }), [getFilteredLeads, getFilteredActivities, getFilteredScheduledTodos]);
 }
