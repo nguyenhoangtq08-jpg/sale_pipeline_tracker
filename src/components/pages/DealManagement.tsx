@@ -106,10 +106,10 @@ type ViewMode = 'table' | 'kanban';
 type DetailTab = 'overview' | 'edit' | 'log';
 
 export function DealManagement() {
-  const { leads, updateLead, deleteLead, activities, currentUser, showToast, addActivity, setSelectedLead, addLead, selectedMemberId } = useApp();
+  const { leads, updateLead, deleteLead, activities, currentUser, showToast, addActivity, setSelectedLead, addLead } = useApp();
 
   // View state
-  const [viewMode, setViewMode] = useState<ViewMode>('kanban');
+  const [viewMode, setViewMode] = useState<ViewMode>('table');
   const [searchQuery, setSearchQuery] = useState('');
   const [stageFilter, setStageFilter] = useState('');
   const [salespersonFilter, setSalespersonFilter] = useState('');
@@ -200,21 +200,18 @@ export function DealManagement() {
     return leadActs.length ? leadActs[0].type : '';
   }, [activities]);
 
-  // Filtered leads based on role and manager's selected member filter
+  // Filtered leads based on role
   const visibleLeads = useMemo(() => {
     if (!currentUser) return [];
 
     if (currentUser.role === 'member') {
-      // Member sees only their own leads
-      return leads.filter(l => l.owner_id === currentUser.id);
+      // Member sees only their own leads (assigned_to matches their name)
+      return leads.filter(l => (l.assigned_to || '') === currentUser.name);
     }
 
-    // Manager: check selectedMemberId from context
-    if (selectedMemberId === null) {
-      return leads;
-    }
-    return leads.filter(l => l.owner_id === selectedMemberId);
-  }, [leads, currentUser, selectedMemberId]);
+    // Manager sees all leads
+    return leads;
+  }, [leads, currentUser]);
 
   // Active deals (not won/lost)
   const activeDeals = useMemo(() => {
@@ -226,9 +223,9 @@ export function DealManagement() {
     return visibleLeads;
   }, [visibleLeads]);
 
-  // Filtered deals
+  // Filtered deals - for table view show ALL deals, for kanban we filter per column
   const filteredDeals = useMemo(() => {
-    let result = [...activeDeals];
+    let result = [...visibleLeads];
 
     // Search filter
     if (searchQuery) {
@@ -247,10 +244,7 @@ export function DealManagement() {
 
     // Salesperson filter (manager only)
     if (salespersonFilter && currentUser?.role === 'manager') {
-      const account = ACCOUNTS.find(a => a.name === salespersonFilter);
-      if (account) {
-        result = result.filter(l => l.owner_id === account.id);
-      }
+      result = result.filter(l => (l.assigned_to || '') === salespersonFilter);
     }
 
     // Sort
@@ -280,7 +274,7 @@ export function DealManagement() {
     }
 
     return result;
-  }, [activeDeals, searchQuery, stageFilter, salespersonFilter, sortMode, currentUser]);
+  }, [visibleLeads, searchQuery, stageFilter, salespersonFilter, sortMode, currentUser]);
 
   // Summary metrics
   const totalDeals = activeDeals.length;
@@ -488,8 +482,7 @@ export function DealManagement() {
     const day = (d: string) => d ? new Date(d).toISOString().slice(0, 10) : '';
     const rows = visibleLeads.map(d => {
       const ev = Math.round((d.deal_size * d.probability) / 100);
-      const account = ACCOUNTS.find(a => a.id === d.owner_id);
-      return [d.name, d.company, d.email, d.phone, d.stage, d.deal_size || 0, d.probability || 0, ev, d.source, account?.name || '', getLatestActivityType(d.id) || '', day(d.created_at), day(d.updated_at)].map(esc).join(',');
+      return [d.name, d.company, d.email, d.phone, d.stage, d.deal_size || 0, d.probability || 0, ev, d.source, d.assigned_to || '', getLatestActivityType(d.id) || '', day(d.created_at), day(d.updated_at)].map(esc).join(',');
     });
     const csv = '\ufeff' + headers.map(esc).join(',') + '\n' + rows.join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -536,26 +529,26 @@ export function DealManagement() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {/* View toggle */}
-          <div className="flex bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
-            <button
-              onClick={() => setViewMode('kanban')}
-              className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${
-                viewMode === 'kanban'
-                  ? 'bg-white dark:bg-gray-700 text-indigo-600 dark:text-indigo-400 shadow-sm'
-                  : 'text-text-muted hover:text-text-primary'
-              }`}
-            >
-              <i className="fa-solid fa-table-columns mr-1.5"></i>Kanban
-            </button>
+          <div className="flex bg-slate-100 dark:bg-slate-800 rounded-xl p-1">
             <button
               onClick={() => setViewMode('table')}
-              className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${
+              className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all ${
                 viewMode === 'table'
-                  ? 'bg-white dark:bg-gray-700 text-indigo-600 dark:text-indigo-400 shadow-sm'
-                  : 'text-text-muted hover:text-text-primary'
+                  ? 'bg-white dark:bg-slate-700 text-indigo-700 dark:text-indigo-300 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-700'
               }`}
             >
-              <i className="fa-solid fa-table-list mr-1.5"></i>Table
+              <i className="fa-solid fa-table-list mr-1" style={viewMode === 'table' ? { color: '#3730a3' } : {}}></i>Table
+            </button>
+            <button
+              onClick={() => setViewMode('kanban')}
+              className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all ${
+                viewMode === 'kanban'
+                  ? 'bg-white dark:bg-slate-700 text-indigo-700 dark:text-indigo-300 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              <i className="fa-solid fa-table-columns mr-1" style={viewMode === 'kanban' ? { color: '#3730a3' } : {}}></i>Kanban
             </button>
           </div>
           <button
@@ -641,58 +634,49 @@ export function DealManagement() {
       {/* ═══ KANBAN VIEW ═══ */}
       {viewMode === 'kanban' && (
         <div className="overflow-x-auto pb-4">
-          <div className="flex gap-3 min-w-max">
-            {STAGES.map(stage => {
-              const stageDeals = dealsByStage[stage] || [];
+          <div className="flex gap-4 min-w-max items-start">
+            {STAGES.slice(0, 5).map(stage => {
+              const stageDeals = (dealsByStage[stage] || []).filter(d => {
+                // Apply search and salesperson filters to kanban cards too
+                if (searchQuery) {
+                  const q = searchQuery.toLowerCase();
+                  if (!d.name.toLowerCase().includes(q) && !(d.company && d.company.toLowerCase().includes(q))) return false;
+                }
+                if (salespersonFilter && currentUser?.role === 'manager') {
+                  if ((d.assigned_to || '') !== salespersonFilter) return false;
+                }
+                return true;
+              });
               const totalValue = stageDeals.reduce((s, d) => s + d.deal_size, 0);
-              const totalEV = stageDeals.reduce((s, d) => s + Math.round(d.deal_size * d.probability / 100), 0);
               const sc = STAGE_COLORS[stage as keyof typeof STAGE_COLORS];
               const isDragOver = dragOverStage === stage;
-              const isClosedWon = stage === 'Closed Won';
-              const isClosedLost = stage === 'Closed Lost';
 
               return (
                 <div
                   key={stage}
-                  className="w-[280px] flex-shrink-0 flex flex-col"
+                  className="flex-none w-[280px] flex flex-col"
                   onDragOver={e => handleDragOver(e, stage)}
                   onDragLeave={handleDragLeave}
                   onDrop={() => handleDrop(stage)}
                 >
                   {/* Column Header */}
                   <div
-                    className={`px-3 py-2 rounded-t-xl border-b-4 ${
-                      isClosedWon ? 'bg-green-50 dark:bg-green-900/20' :
-                      isClosedLost ? 'bg-red-50 dark:bg-red-900/20' :
-                      'bg-white dark:bg-gray-800'
-                    }`}
-                    style={{ borderColor: sc }}
+                    className="p-3 bg-white dark:bg-gray-800 border border-b-0 rounded-t-xl"
+                    style={{ borderTop: `3px solid ${sc}` }}
                   >
                     <div className="flex items-center justify-between mb-1">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full" style={{ background: sc }}></div>
-                        <span className="text-[10px] font-extrabold uppercase tracking-wider text-text-muted">{stage}</span>
-                      </div>
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                        isClosedWon ? 'bg-green-100 dark:bg-green-800 text-green-600 dark:text-green-300' :
-                        isClosedLost ? 'bg-red-100 dark:bg-red-800 text-red-600 dark:text-red-300' :
-                        'bg-gray-100 dark:bg-gray-700 text-text-muted'
-                      }`}>
+                      <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">{stage}</span>
+                      <span className="text-[10px] bg-slate-100 dark:bg-slate-700 px-2 py-0.5 rounded-full font-bold text-slate-600 dark:text-slate-300">
                         {stageDeals.length}
                       </span>
                     </div>
-                    <div className="text-lg font-extrabold text-text-primary dark:text-white">{fmtCurrency(totalValue)}</div>
-                    <div className="text-xs text-text-muted">EV: {fmtCurrency(totalEV)}</div>
+                    <div className="text-sm font-bold text-slate-800 dark:text-white">{fmtCurrency(totalValue)}</div>
                   </div>
 
                   {/* Cards Container */}
                   <div
-                    className={`flex-1 p-2 rounded-b-xl min-h-[200px] space-y-2 transition-colors ${
-                      isDragOver
-                        ? 'bg-indigo-50 dark:bg-indigo-900/20 border-2 border-dashed border-accent'
-                        : isClosedWon ? 'bg-green-50/50 dark:bg-green-900/10' :
-                        isClosedLost ? 'bg-red-50/50 dark:bg-red-900/10' :
-                        'bg-gray-50 dark:bg-gray-900/30'
+                    className={`bg-slate-50/50 dark:bg-slate-900/30 border p-2 rounded-b-xl min-h-[450px] space-y-3 transition-colors ${
+                      isDragOver ? 'bg-indigo-50 dark:bg-indigo-900/20 border-accent' : ''
                     }`}
                   >
                     {stageDeals.map(deal => (
@@ -700,18 +684,12 @@ export function DealManagement() {
                         key={deal.id}
                         deal={deal}
                         stageColor={sc}
-                        assignedTo={ACCOUNTS.find(a => a.id === deal.owner_id)?.name}
+                        assignedTo={deal.assigned_to}
                         latestActivity={getLatestActivityType(deal.id)}
                         onDragStart={() => handleDragStart(deal)}
                         onClick={() => openDetailDrawer(deal)}
                       />
                     ))}
-                    {stageDeals.length === 0 && !isDragOver && !isClosedWon && !isClosedLost && (
-                      <div className="flex flex-col items-center justify-center py-8 text-text-muted border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-lg">
-                        <i className="fa-regular fa-folder-open text-lg mb-1"></i>
-                        <span className="text-xs">Drop here</span>
-                      </div>
-                    )}
                   </div>
                 </div>
               );
@@ -747,43 +725,37 @@ export function DealManagement() {
                   const canFwd = deal.stage !== 'Closed Won' && deal.stage !== 'Closed Lost';
                   const canBwd = stageIdx > 0;
                   const latestAct = getLatestActivityType(deal.id);
-                  const assignedAccount = ACCOUNTS.find(a => a.id === deal.owner_id);
 
                   return (
                     <tr
                       key={deal.id}
                       onClick={() => openDetailDrawer(deal)}
-                      className="hover:bg-indigo-50/50 dark:hover:bg-indigo-900/10 cursor-pointer transition-colors"
+                      className="hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer transition-colors"
                     >
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-3">
-                          <div
-                            className="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-xs"
-                            style={{ background: sc }}
-                          >
+                          <div className="w-8 h-8 rounded-lg bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-300 flex items-center justify-center font-bold text-xs">
                             {deal.name.charAt(0).toUpperCase()}
                           </div>
                           <div>
-                            <div className="font-bold text-text-primary dark:text-white text-sm">{deal.name}</div>
-                            <div className="text-[10px] text-text-muted flex items-center gap-1">
-                              <i className="fa-regular fa-building text-[9px]"></i>{deal.company || '—'}
-                            </div>
-                            {assignedAccount && (
-                              <div className="text-[10px] text-text-muted mt-0.5">
-                                <i className="fa-solid fa-user-tie text-[9px]"></i> {assignedAccount.name}
+                            <div className="font-bold text-slate-800 dark:text-white text-sm">{deal.name}</div>
+                            <div className="text-[10px] text-slate-400">{deal.company || '—'}</div>
+                            {deal.assigned_to && (
+                              <div className="text-[10px] text-slate-400 mt-0.5">
+                                <i className="fa-solid fa-user-tie text-[9px]"></i> {deal.assigned_to}
                               </div>
                             )}
                           </div>
                         </div>
                       </td>
-                      <td className="px-4 py-3 font-bold text-text-primary dark:text-white">{fmtCurrency(deal.deal_size)}</td>
+                      <td className="px-4 py-3 font-bold text-slate-700 dark:text-slate-200">{fmtCurrency(deal.deal_size)}</td>
                       <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center gap-1">
                           <button
                             onClick={() => handleQuickStage(deal.id, -1)}
                             disabled={!canBwd}
-                            className={`w-6 h-6 rounded flex items-center justify-center border transition-all ${
-                              canBwd ? 'border-border hover:border-accent hover:text-accent text-text-muted' : 'border-transparent text-gray-300 cursor-not-allowed'
+                            className={`w-6 h-6 border rounded text-slate-400 hover:text-indigo-600 bg-white dark:bg-slate-800 transition-all ${
+                              canBwd ? '' : 'opacity-50 cursor-not-allowed'
                             }`}
                           >
                             <i className="fa-solid fa-chevron-left text-[8px]"></i>
@@ -794,8 +766,8 @@ export function DealManagement() {
                           <button
                             onClick={() => handleQuickStage(deal.id, 1)}
                             disabled={!canFwd}
-                            className={`w-6 h-6 rounded flex items-center justify-center border transition-all ${
-                              canFwd ? 'border-border hover:border-accent hover:text-accent text-text-muted' : 'border-transparent text-gray-300 cursor-not-allowed'
+                            className={`w-6 h-6 border rounded text-slate-400 hover:text-indigo-600 bg-white dark:bg-slate-800 transition-all ${
+                              canFwd ? '' : 'opacity-50 cursor-not-allowed'
                             }`}
                           >
                             <i className="fa-solid fa-chevron-right text-[8px]"></i>
@@ -807,41 +779,49 @@ export function DealManagement() {
                       </td>
                       <td className="px-4 py-3">
                         {latestAct ? (
-                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                            latestAct === 'Call' ? 'bg-green-100 dark:bg-green-900/30 text-green-600' :
-                            latestAct === 'Email' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600' :
-                            latestAct === 'Meeting' ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-600' :
-                            'bg-gray-100 dark:bg-gray-800 text-gray-600'
-                          }`}>
-                            <i className={`fa-solid ${ACTIVITY_ICONS[latestAct] || 'fa-circle'} text-[9px]`}></i>
+                          <span style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            padding: '3px 9px',
+                            borderRadius: '20px',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            background: latestAct === 'Call' ? '#f0fdf4' : latestAct === 'Email' ? '#eff6ff' : latestAct === 'Meeting' ? '#f0fdf4' : '#f8fafc',
+                            border: `1px solid ${latestAct === 'Call' ? '#bbf7d0' : latestAct === 'Email' ? '#bfdbfe' : latestAct === 'Meeting' ? '#bbf7d0' : '#e2e8f0'}`,
+                            color: latestAct === 'Call' ? '#15803d' : latestAct === 'Email' ? '#1d4ed8' : latestAct === 'Meeting' ? '#15803d' : '#475569',
+                          }}>
+                            <i className={`fa-solid ${ACTIVITY_ICONS[latestAct] || 'fa-circle'} text-[10px]`} style={{
+                              color: latestAct === 'Call' ? '#16a34a' : latestAct === 'Email' ? '#2563eb' : latestAct === 'Meeting' ? '#16a34a' : '#64748b'
+                            }}></i>
                             {latestAct}
                           </span>
                         ) : (
-                          <span className="text-xs text-text-muted">—</span>
+                          <span className="text-xs text-slate-400">—</span>
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        <span className="text-xs text-text-muted whitespace-nowrap">{timeAgo(deal.updated_at)}</span>
+                        <span className="text-xs text-slate-500 whitespace-nowrap">{timeAgo(deal.updated_at)}</span>
                       </td>
                       <td className="px-4 py-3 text-right" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1">
                           <button
                             onClick={() => openDetailDrawer(deal)}
-                            className="w-7 h-7 rounded flex items-center justify-center text-text-muted hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-all"
+                            className="w-7 h-7 rounded border bg-white dark:bg-slate-800 text-slate-500 hover:text-indigo-600 transition-all"
                             title="View"
                           >
                             <i className="fa-solid fa-eye text-xs"></i>
                           </button>
                           <button
                             onClick={() => openEditModal(deal)}
-                            className="w-7 h-7 rounded flex items-center justify-center text-text-muted hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-all"
+                            className="w-7 h-7 rounded border bg-white dark:bg-slate-800 text-slate-500 hover:text-amber-600 transition-all"
                             title="Edit"
                           >
                             <i className="fa-solid fa-pen text-xs"></i>
                           </button>
                           <button
                             onClick={() => handleDeleteDeal(deal)}
-                            className="w-7 h-7 rounded flex items-center justify-center text-text-muted hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all"
+                            className="w-7 h-7 rounded border bg-white dark:bg-slate-800 text-slate-500 hover:text-red-500 transition-all"
                             title="Delete"
                           >
                             <i className="fa-solid fa-trash-can text-xs"></i>
@@ -931,7 +911,7 @@ export function DealManagement() {
                 </div>
                 <div>
                   <span className="text-[10px] font-bold text-text-muted uppercase">Assigned To</span>
-                  <p className="font-semibold text-text-primary dark:text-white mt-1">{ACCOUNTS.find(a => a.id === selectedDeal.owner_id)?.name || '—'}</p>
+                  <p className="font-semibold text-text-primary dark:text-white mt-1">{selectedDeal.assigned_to || '—'}</p>
                 </div>
                 <div>
                   <span className="text-[10px] font-bold text-text-muted uppercase">Email</span>
@@ -1318,43 +1298,25 @@ function DealCard({
   onClick: () => void;
 }) {
   const ev = Math.round(deal.deal_size * deal.probability / 100);
-  const pc = probColor(deal.probability);
 
   return (
     <div
       draggable
       onDragStart={onDragStart}
       onClick={onClick}
-      className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-3 cursor-pointer hover:shadow-md hover:border-accent/50 transition-all active:cursor-grabbing"
-      style={{ borderLeftWidth: '3px', borderLeftColor: stageColor }}
+      className="bg-white dark:bg-gray-800 p-3 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 cursor-pointer hover:shadow-md hover:border-indigo-300 dark:hover:border-indigo-600 transition-all animate-slide-up"
     >
-      <div className="font-semibold text-text-primary dark:text-white text-xs truncate">{deal.name}</div>
-      <div className="text-[10px] text-text-muted mt-0.5 truncate">{deal.company}</div>
+      <div className="font-bold text-xs mb-1 text-slate-800 dark:text-white">{deal.name}</div>
+      <div className="text-[10px] text-slate-500 mb-2">{deal.company}</div>
       {assignedTo && (
-        <div className="text-[9px] text-text-muted mt-1">
+        <div className="text-[9px] text-slate-400 mb-2">
           <i className="fa-solid fa-user-tie"></i> {assignedTo}
         </div>
       )}
-
-      <div className="mt-2">
-        <span
-          className="px-2 py-0.5 rounded-full text-[10px] font-bold"
-          style={{ background: pc + '20', color: pc }}
-        >
+      <div className="flex justify-between items-center border-t border-slate-100 dark:border-slate-700 pt-2 mt-2">
+        <div className="text-[11px] font-extrabold text-indigo-600">{fmtCompact(deal.deal_size)}</div>
+        <div className="text-[9px] font-bold bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-1.5 py-0.5 rounded">
           {deal.probability}%
-        </span>
-      </div>
-
-      <div className="flex items-end justify-between mt-3 pt-2 border-t border-gray-100 dark:border-gray-700">
-        <span className="text-sm font-extrabold text-text-primary dark:text-white">{fmtCompact(deal.deal_size)}</span>
-        <div className="text-right">
-          {latestActivity && (
-            <div className="flex items-center gap-1 text-[10px] text-text-muted">
-              <i className={`fa-solid ${ACTIVITY_ICONS[latestActivity] || 'fa-circle'} text-[9px]`}></i>
-              {latestActivity}
-            </div>
-          )}
-          <div className="text-[10px] text-text-muted mt-0.5">EV: {fmtCompact(ev)}</div>
         </div>
       </div>
     </div>
