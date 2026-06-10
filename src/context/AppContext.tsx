@@ -81,9 +81,7 @@ type AppContextType = AppState & {
   getPipelineData: () => { stage: string; count: number; value: number }[];
   getRevenueByMonth: () => { month: string; value: number }[];
   getLeadSourceDistribution: () => { source: string; count: number }[];
-  getTemperatureMatrix: () => { temperature: string; count: number; value: number }[];
-  markNotificationRead: (id: string) => void;
-  markAllNotificationsRead: () => void;
+  getLeadStatusDistribution: () => { status: string; count: number; value: number }[];
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -134,14 +132,86 @@ function safeJsonParse<T>(json: string | null, fallback: T): T {
 
 function getSeedLeads(): Lead[] {
   return [
-    { id: 'lead_1', name: 'Nguyễn Thị Linh', company: 'TechCorp Vietnam', email: 'linh@techcorp.vn', phone: '0901234567', deal_size: 32000, source: 'Website', stage: 'Proposal', probability: 50, notes: 'Interested in enterprise package', owner_id: '1', created_at: '2026-03-15T08:00:00Z', updated_at: '2026-05-20T10:00:00Z' },
-    { id: 'lead_2', name: 'Trần Minh Đức', company: 'ABC Manufacturing', email: 'duc@abcmfg.vn', phone: '0912345678', deal_size: 45000, source: 'Referral', stage: 'Negotiation', probability: 75, notes: 'Budget approved, finalizing terms', owner_id: '1', created_at: '2026-02-10T09:00:00Z', updated_at: '2026-05-25T14:00:00Z' },
-    { id: 'lead_3', name: 'Phạm Thị Hoa', company: 'XYZ Retail Group', email: 'hoa@xyz.vn', phone: '0923456789', deal_size: 18500, source: 'Event', stage: 'Qualification', probability: 25, notes: 'Met at Vietnam Tech Summit', owner_id: '2', created_at: '2026-04-01T10:00:00Z', updated_at: '2026-05-10T09:00:00Z' },
-    { id: 'lead_4', name: 'Lê Văn Nam', company: 'StartupVN', email: 'nam@startupvn.vn', phone: '0934567890', deal_size: 78000, source: 'Cold Call', stage: 'Prospecting', probability: 10, notes: 'CEO, very busy schedule', owner_id: '3', created_at: '2026-05-01T11:00:00Z', updated_at: '2026-05-01T11:00:00Z' },
-    { id: 'lead_5', name: 'Võ Thị Mai', company: 'Global Logistics Co', email: 'mai@global.vn', phone: '0945678901', deal_size: 55000, source: 'Website', stage: 'Closed Won', probability: 100, notes: 'Contract signed April 2026', owner_id: '2', created_at: '2026-01-15T08:00:00Z', updated_at: '2026-04-30T16:00:00Z' },
-    { id: 'lead_6', name: 'Đặng Quốc Hùng', company: 'Saigon Food JSC', email: 'hung@saigon.vn', phone: '0956789012', deal_size: 28000, source: 'Referral', stage: 'Closed Won', probability: 100, notes: 'Upsell opportunity Q3', owner_id: '3', created_at: '2026-02-20T09:00:00Z', updated_at: '2026-05-15T11:00:00Z' },
-    { id: 'lead_7', name: 'Bùi Thị Lan', company: 'MedTech Solutions', email: 'lan@medtech.vn', phone: '0967890123', deal_size: 92000, source: 'Event', stage: 'Proposal', probability: 50, notes: 'Needs board approval', owner_id: '1', created_at: '2026-04-10T10:00:00Z', updated_at: '2026-05-28T13:00:00Z' },
-    { id: 'lead_8', name: 'Hoàng Văn Tùng', company: 'EduSmart Vietnam', email: 'tung@edusmart.vn', phone: '0978901234', deal_size: 15000, source: 'Website', stage: 'Closed Lost', probability: 0, notes: 'Chose competitor on price', owner_id: '2', created_at: '2026-03-05T08:00:00Z', updated_at: '2026-04-20T10:00:00Z' }
+    {
+      id: 'LD-20260610-0001', name: 'Nguyen Van Minh', company: 'TechCorp Vietnam',
+      email: 'minh.nguyen@techcorp.vn', phone: '+84-28-1234-5678',
+      website: 'https://techcorp.vn', city: 'Ho Chi Minh', industry: 'Technology',
+      source: 'Website', stage: 'Prospecting',
+      deal_size: 150000, probability: 25, owner_id: '1', assigned_to: 'Duy Tran',
+      lead_status: 'New', notes: 'Interested in enterprise package',
+      created_at: '2024-03-10T08:00:00Z', updated_at: '2024-03-15T14:30:00Z',
+      last_activity: '2024-03-15',
+    },
+    {
+      id: 'LD-20260610-0002', name: 'Tran Thi Mai', company: 'Global Solutions Ltd',
+      email: 'mai.tran@globalsolutions.com', phone: '+1-555-0123',
+      website: 'https://globalsolutions.com', city: 'Ha Noi', industry: 'Consulting',
+      source: 'Referral', stage: 'Qualification',
+      deal_size: 75000, probability: 40, owner_id: '2', assigned_to: 'Mai Le',
+      lead_status: 'New', notes: 'Multi-location deployment needed',
+      created_at: '2024-03-08T10:00:00Z', updated_at: '2024-03-14T16:00:00Z',
+      last_activity: '2024-03-14',
+    },
+    {
+      id: 'LD-20260610-0003', name: 'Le Van Tuan', company: 'Innovation Hub',
+      email: 'tuan.le@innovationhub.io', phone: '+44-20-7946-0958',
+      website: 'https://innovationhub.io', city: 'Da Nang', industry: 'Technology',
+      source: 'Event', stage: 'Proposal',
+      deal_size: 200000, probability: 60, owner_id: '1', assigned_to: 'Duy Tran',
+      lead_status: 'Converted', notes: 'Custom integration requirements',
+      created_at: '2024-03-05T09:00:00Z', updated_at: '2024-03-13T11:00:00Z',
+      last_activity: '2024-03-13',
+    },
+    {
+      id: 'LD-20260610-0004', name: 'Pham Thi Hong', company: 'DataFlow Systems',
+      email: 'hong.pham@dataflow.sys', phone: '+49-30-1234-5678',
+      website: 'https://dataflow.sys', city: 'Ho Chi Minh', industry: 'Technology',
+      source: 'LinkedIn', stage: 'Negotiation',
+      deal_size: 120000, probability: 80, owner_id: '3', assigned_to: 'Hung Vo',
+      lead_status: 'Converted', notes: 'Pricing negotiation in progress',
+      created_at: '2024-03-01T08:00:00Z', updated_at: '2024-03-12T15:00:00Z',
+      last_activity: '2024-03-12',
+    },
+    {
+      id: 'LD-20260610-0005', name: 'Hoang Van Duc', company: 'Cloud Nine Inc',
+      email: 'duc.hoang@cloudnine.com', phone: '+1-555-0456',
+      website: 'https://cloudnine.com', city: 'Ha Noi', industry: 'Retail',
+      source: 'Cold Call', stage: 'Closed Won',
+      deal_size: 95000, probability: 100, owner_id: '2', assigned_to: 'Mai Le',
+      lead_status: 'Converted', notes: 'Contract signed, implementation started',
+      created_at: '2024-02-20T10:00:00Z', updated_at: '2024-03-11T09:00:00Z',
+      last_activity: '2024-03-11',
+    },
+    {
+      id: 'LD-20260610-0006', name: 'Bui Thi Lan', company: 'MegaCorp Industries',
+      email: 'lan.bui@megacorp.com', phone: '+81-3-1234-5678',
+      website: 'https://megacorp.com', city: 'Ho Chi Minh', industry: 'Finance',
+      source: 'Website', stage: 'Closed Lost',
+      deal_size: 300000, probability: 0, owner_id: '1', assigned_to: 'Duy Tran',
+      lead_status: 'Rejected', notes: 'Budget cut, postponed to Q3',
+      created_at: '2024-02-15T08:00:00Z', updated_at: '2024-03-10T14:00:00Z',
+      last_activity: '2024-03-10',
+    },
+    {
+      id: 'LD-20260610-0007', name: 'Vu Van Khoa', company: 'StartupXYZ',
+      email: 'khoa.vu@startupxyz.io', phone: '+1-555-0789',
+      website: 'https://startupxyz.io', city: 'Da Nang', industry: 'Technology',
+      source: 'Referral', stage: 'Prospecting',
+      deal_size: 45000, probability: 15, owner_id: '3', assigned_to: 'Hung Vo',
+      lead_status: 'New', notes: 'Early stage, needs nurturing',
+      created_at: '2024-03-08T11:00:00Z', updated_at: '2024-03-09T10:00:00Z',
+      last_activity: '2024-03-09',
+    },
+    {
+      id: 'LD-20260610-0008', name: 'Doan Thi Ngoc', company: 'Enterprise Solutions',
+      email: 'ngoc.doan@enterprise.sol', phone: '+33-1-23-45-67-89',
+      website: 'https://enterprise.sol', city: 'Ha Noi', industry: 'Consulting',
+      source: 'Event', stage: 'Qualification',
+      deal_size: 180000, probability: 30, owner_id: '2', assigned_to: 'Mai Le',
+      lead_status: 'New', notes: 'Evaluating multiple vendors',
+      created_at: '2024-03-01T09:00:00Z', updated_at: '2024-03-08T16:00:00Z',
+      last_activity: '2024-03-08',
+    },
   ];
 }
 
@@ -355,8 +425,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const getFilteredLeads = useCallback((): Lead[] => {
     if (!Array.isArray(leads)) return [];
     if (!currentUser) return [];
-    if (isManager()) return leads;
-    return leads.filter(l => l && l.owner_id === currentUser.id);
+    if (currentUser.role === 'manager') return leads;
+    return leads.filter(l => l && l.assigned_to === currentUser.name);
   }, [leads, currentUser]);
 
   const getFilteredActivities = useCallback((): Activity[] => {
@@ -445,8 +515,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       { id: '3', name: 'Hung Vo' },
     ];
     return teamMembers.map(member => {
-      const memberLeads = safeLeads.filter(l => l && l.owner_id === member.id);
-      const won = memberLeads.filter(l => l?.stage === 'Closed Won');
+      const memberLeads = safeLeads.filter(l => l && l.assigned_to === member.name);
+      const won = memberLeads.filter(l => l && l.stage === 'Closed Won');
       const total = memberLeads.filter(l => l && ['Closed Won', 'Closed Lost'].includes(l.stage));
       const revenue = won.reduce((sum, l) => sum + (Number(l.deal_size) || 0), 0);
       const winRate = total.length > 0 ? (won.length / total.length) * 100 : 0;
@@ -479,12 +549,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return Object.entries(sources).map(([source, count]) => ({ source, count }));
   }, [leads]);
 
-  const getTemperatureMatrix = useCallback(() => {
+  // Defensive lead status distribution
+  const getLeadStatusDistribution = useCallback(() => {
     const safeLeads = Array.isArray(leads) ? leads : [];
-    const temps = ['Hot', 'Warm', 'Cold'];
-    return temps.map(temperature => {
-      const tempLeads = safeLeads.filter(l => l?.stage === temperature);
-      return { temperature, count: tempLeads.length, value: tempLeads.reduce((sum, l) => sum + (Number(l.deal_size) || 0), 0) };
+    const statuses = ['New', 'Converted', 'Rejected'];
+    return statuses.map(status => {
+      const statusLeads = safeLeads.filter(l => l && l.lead_status === status);
+      return {
+        status,
+        count: statusLeads.length,
+        value: statusLeads.reduce((sum, l) => sum + (Number(l.deal_size) || 0), 0),
+      };
     });
   }, [leads]);
 
@@ -517,14 +592,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setShowAddDealModal, setActivityLogMode, setDealViewMode, setLeadViewMode,
     setSidebarCollapsed, setSelectedMemberId,
     addLead, updateLead, deleteLead, addActivity, updateActivity, deleteActivity,
-    addScheduledTodo, updateScheduledTodo, deleteScheduledTodo, toggleTodoDone,
-    updateLeadRules, showToast, showToastWithType, hideToast, dismissToast,
-    signOut, signIn, toggleDarkMode,
-    getFilteredLeads, getFilteredActivities, getFilteredScheduledTodos,
-    getLeadById, getActivitiesForLead,
-    getTeamPerformance, getPipelineData, getRevenueByMonth, getLeadSourceDistribution, getTemperatureMatrix,
-    markNotificationRead, markAllNotificationsRead,
-    logout: signOut, login: (user: User) => setCurrentUser(user),
+    showToast: showToastFn, hideToast, logout, login,
+    getFilteredLeads, getFilteredActivities, getLeadById, getActivitiesForLead,
+    getTeamPerformance, getPipelineData, getRevenueByMonth, getLeadSourceDistribution,
+    getLeadStatusDistribution,
   }), [
     currentUser, currentPage, leads, activities, scheduledTodos, leadRules, notifications, toasts,
     selectedLead, selectedActivity, selectedMemberId, darkMode, sidebarCollapsed,
@@ -532,13 +603,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     showNotificationsModal, showLeadRulesModal, showAddDealModal,
     activityLogMode, dealViewMode, leadViewMode, isAuthLoading,
     addLead, updateLead, deleteLead, addActivity, updateActivity, deleteActivity,
-    addScheduledTodo, updateScheduledTodo, deleteScheduledTodo, toggleTodoDone,
-    updateLeadRules, showToast, showToastWithType, hideToast, dismissToast,
-    signOut, signIn, toggleDarkMode,
-    getFilteredLeads, getFilteredActivities, getFilteredScheduledTodos,
-    getLeadById, getActivitiesForLead,
-    getTeamPerformance, getPipelineData, getRevenueByMonth, getLeadSourceDistribution, getTemperatureMatrix,
-    markNotificationRead, markAllNotificationsRead,
+    getFilteredLeads, getFilteredActivities, getLeadById, getActivitiesForLead,
+    getTeamPerformance, getPipelineData, getRevenueByMonth, getLeadSourceDistribution,
+    getLeadStatusDistribution,
   ]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
