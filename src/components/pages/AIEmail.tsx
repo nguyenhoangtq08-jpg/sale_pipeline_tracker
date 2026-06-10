@@ -187,7 +187,7 @@ Return ONLY valid JSON, no markdown fences, in this exact shape:
     setIsGenerating(true);
     setEmail(null);
 
-    const apiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
+    const apiKey = (window as any).__VITE_GOOGLE_AI_KEY || localStorage.getItem('google_ai_key') || '';
     const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
 
     let generatedEmail = null;
@@ -218,7 +218,7 @@ Return ONLY valid JSON, no markdown fences, in this exact shape:
     } catch (err) {
       generatedEmail = getFallbackEmail(selectedLead, leadActivities);
       if ((err as Error).message === 'NO_KEY') {
-        showToast('warning', 'No API key set — showing a template draft. Add VITE_GEMINI_API_KEY to enable AI.');
+        showToast('warning', 'No API key set — showing a template draft. Add VITE_GOOGLE_AI_KEY to enable AI.');
       } else {
         showToast('warning', 'AI call failed — showing a template draft instead.');
       }
