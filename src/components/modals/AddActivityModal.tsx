@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Modal } from '../shared/Modal';
 import { Badge } from '../shared/Badge';
-import { ACTIVITY_TYPES, STAGE_COLORS, type ActivityType, type ActivityMode, type Lead } from '../../types';
+import { ACTIVITY_TYPES, ACTIVITY_COLORS, STAGE_COLORS, ACCOUNTS, type ActivityType, type ActivityMode, type Lead } from '../../types';
 
 interface AddActivityModalProps {
   isOpen: boolean;
@@ -14,6 +14,8 @@ interface AddActivityModalProps {
 
 export function AddActivityModal({ isOpen, onClose, mode, onModeChange, preselectedLead }: AddActivityModalProps) {
   const { leads, currentUser, addActivity, addScheduledTodo, showToast } = useApp();
+  const isManager = currentUser?.role === 'manager';
+  const teamMembers = ACCOUNTS.filter(a => a.role === 'member');
 
   const [logForm, setLogForm] = useState({
     type: 'Call' as ActivityType,
@@ -28,6 +30,7 @@ export function AddActivityModal({ isOpen, onClose, mode, onModeChange, preselec
   });
 
   const [scheduleForm, setScheduleForm] = useState({
+    type: 'Call' as ActivityType,
     lead_id: preselectedLead?.id || '',
     lead_name: preselectedLead?.name || '',
     company: preselectedLead?.company || '',
@@ -35,6 +38,7 @@ export function AddActivityModal({ isOpen, onClose, mode, onModeChange, preselec
     scheduled_date: new Date().toISOString().split('T')[0],
     scheduled_time: '09:00',
     agenda: '',
+    assigned_to: currentUser?.id || '',
   });
 
   const handleSelectLead = (lead: Lead | undefined) => {
@@ -93,6 +97,7 @@ export function AddActivityModal({ isOpen, onClose, mode, onModeChange, preselec
     }
 
     await addScheduledTodo({
+      type: scheduleForm.type,
       lead_id: scheduleForm.lead_id || null,
       lead_name: scheduleForm.lead_name,
       company: scheduleForm.company || null,
@@ -102,6 +107,7 @@ export function AddActivityModal({ isOpen, onClose, mode, onModeChange, preselec
       agenda: scheduleForm.agenda,
       done: false,
       owner_id: currentUser?.id || '0',
+      assigned_to: scheduleForm.assigned_to || currentUser?.id || '0',
     });
 
     resetForms();
@@ -121,6 +127,7 @@ export function AddActivityModal({ isOpen, onClose, mode, onModeChange, preselec
       next_action: '',
     });
     setScheduleForm({
+      type: 'Call',
       lead_id: '',
       lead_name: '',
       company: '',
@@ -128,6 +135,7 @@ export function AddActivityModal({ isOpen, onClose, mode, onModeChange, preselec
       scheduled_date: new Date().toISOString().split('T')[0],
       scheduled_time: '09:00',
       agenda: '',
+      assigned_to: currentUser?.id || '',
     });
   };
 
@@ -269,6 +277,33 @@ export function AddActivityModal({ isOpen, onClose, mode, onModeChange, preselec
       {/* Schedule Mode Form */}
       {mode === 'schedule' && (
         <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-text-primary dark:text-white mb-1">Type</label>
+              <select
+                value={scheduleForm.type}
+                onChange={(e) => setScheduleForm({ ...scheduleForm, type: e.target.value as ActivityType })}
+                className="w-full px-4 py-2 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white"
+              >
+                {ACTIVITY_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            {isManager && (
+              <div>
+                <label className="block text-sm font-medium text-text-primary dark:text-white mb-1">Assign To</label>
+                <select
+                  value={scheduleForm.assigned_to}
+                  onChange={(e) => setScheduleForm({ ...scheduleForm, assigned_to: e.target.value })}
+                  className="w-full px-4 py-2 rounded-lg border border-border dark:border-border bg-transparent text-text-primary dark:text-white"
+                >
+                  <option value={currentUser?.id}>Myself</option>
+                  {teamMembers.map(m => (
+                    <option key={m.id} value={m.id}>{m.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-text-primary dark:text-white mb-1">Scheduled Date</label>
